@@ -1,1 +1,322 @@
-# BlokusAI
+# Blokus AI - AlphaZero-Style Reinforcement Learning
+
+An AlphaZero-style reinforcement learning AI for Blokus, currently supporting **Blokus Duo (2-player)** with plans to extend to 4-player and eventually a mobile AR app.
+
+## 🎯 Project Status
+
+**Current Stage**: Functional Blokus Duo AI with complete training pipeline
+
+### Completed Features
+
+- ✅ Complete Blokus Duo game engine
+- ✅ MCTS (Monte Carlo Tree Search) with PUCT
+- ✅ Policy/Value neural network
+- ✅ Self-play training pipeline
+- ✅ Evaluation system (vs Random, vs Greedy)
+- ✅ Advanced visualization (MCTS analysis, heatmaps)
+- ✅ Comprehensive documentation
+
+### Performance
+
+- **AI vs Greedy**: 100% win rate after just 2 training iterations! ⭐
+- **AI vs Random**: 40% win rate (early training)
+- Training time: ~10-15 seconds per iteration (2 games, 15 simulations)
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Clone the repository
+cd BlokusAI
+
+# Install dependencies (using uv)
+uv sync
+
+# Or with pip
+pip install numpy torch matplotlib
+```
+
+### Run a Quick Demo
+
+```bash
+# Test that everything works (15 seconds)
+uv run python train.py test
+
+# Quick training with evaluation (2-3 minutes)
+uv run python train.py quick
+
+# Visualize AI thinking
+uv run python demo_viz.py
+
+# Analyze a full game
+uv run python analyze_game.py
+```
+
+## 📚 Documentation
+
+- **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)** - Comprehensive training guide
+- **[VISUALIZATION.md](VISUALIZATION.md)** - Visualization features guide
+- **[PROGRESS.md](PROGRESS.md)** - Development progress log
+- **[SESSION_SUMMARY.md](SESSION_SUMMARY.md)** - Latest session summary
+- **[CLAUDE.md](CLAUDE.md)** - Project architecture (for Claude Code)
+- **[blokus_ai_devlog.md](blokus_ai_devlog.md)** - Detailed dev log (Japanese)
+
+## 🎮 Usage Examples
+
+### Training
+
+```bash
+# Quick test (1 iteration, no eval)
+uv run python train.py test
+
+# Standard training (2 iterations with eval)
+uv run python train.py quick
+
+# Demo training (5 iterations, detailed output)
+uv run python train_demo.py
+
+# Medium training (20 iterations)
+uv run python train_medium.py
+
+# Full training (50 iterations)
+uv run python train.py
+```
+
+### Evaluation
+
+```bash
+# Evaluate baseline (Random vs Greedy)
+uv run python eval.py
+
+# Evaluate trained model (edit eval.py to load your model)
+# Uncomment the last section in eval.py, then:
+uv run python eval.py
+```
+
+### Visualization
+
+```bash
+# Visualize MCTS top-5 moves and heatmap
+uv run python demo_viz.py
+
+# Analyze a complete game (6 key positions)
+uv run python analyze_game.py
+
+# Random game demo
+uv run python play_demo.py
+```
+
+## 🏗️ Architecture
+
+### Core Components
+
+```
+┌─────────────┐
+│  Self-Play  │ ← MCTS + Neural Network
+└──────┬──────┘
+       │ (states, policies, outcomes)
+       ↓
+┌─────────────┐
+│  Training   │ ← Policy Loss + Value Loss
+└──────┬──────┘
+       │ (updated network)
+       ↓
+┌─────────────┐
+│ Evaluation  │ ← vs Random, Greedy, Past Self
+└─────────────┘
+```
+
+### Key Files
+
+**Core Engine**:
+
+- `pieces.py` - Blokus piece definitions and rotations
+- `state.py` - Game state representation
+- `engine.py` - Legal move generation, game rules
+- `encode.py` - State → neural network input
+
+**Learning**:
+
+- `net.py` - ResNet-style policy/value network
+- `mcts.py` - Monte Carlo Tree Search (PUCT)
+- `selfplay.py` - Self-play game generation
+- `train.py` - Training loop
+
+**Analysis**:
+
+- `eval.py` - Model evaluation
+- `viz.py` - Visualization functions
+- `demo_viz.py` - Visualization demo
+- `analyze_game.py` - Game replay analysis
+
+## 🎨 Visualization Features
+
+### MCTS Top-K Analysis
+
+```bash
+uv run python demo_viz.py
+```
+
+Output: `mcts_top5.png`
+
+- Shows top 5 moves by MCTS visit count
+- Displays visit %, Q-values
+- Highlights new tiles in red
+
+### Move Probability Heatmap
+
+Output: `move_heatmap.png`
+
+- Color-coded probability distribution across board
+- Shows where AI is considering moves
+
+### Game Analysis
+
+```bash
+uv run python analyze_game.py
+```
+
+Output: `game_analysis/pos01-06_*.png` (12 images)
+
+- Analyzes 6 key positions from a full game
+- Both top-5 and heatmap for each position
+
+## 🧠 How It Works
+
+### Training Process
+
+1. **Self-Play**: AI plays against itself using MCTS
+   - Each move: run N MCTS simulations
+   - Record visit distribution π as training target
+   - Play until game end
+
+2. **Learning**: Update neural network
+   - Policy loss: Match NN output to MCTS π
+   - Value loss: Predict game outcome
+   - Both from current player's perspective
+
+3. **Evaluation**: Measure strength
+   - Play against Random baseline
+   - Play against Greedy baseline
+   - Track win rate over time
+
+### MCTS Details
+
+Uses PUCT (Polynomial Upper Confidence Trees):
+
+- **Selection**: Pick move maximizing Q + U
+- **Expansion**: Add new node, evaluate with NN
+- **Backup**: Propagate value up tree (negating each level)
+- **Policy**: Visit counts → improved policy π
+
+### Neural Network
+
+**Input** (5 channels):
+
+- Self occupancy
+- Opponent occupancy
+- Self corner candidates
+- Self edge-blocked cells
+- Opponent corner candidates
+
+**Policy Head**: Scores each legal move
+
+- Extract features at move cells
+- Combine with piece embedding, anchor, size
+- MLP → logit per move
+
+**Value Head**: Estimates win probability
+
+- Global average pooling
+- Combine with remaining pieces
+- MLP → tanh value [-1, 1]
+
+## 📊 Training Progress Example
+
+```
+=== Iteration 1/2 ===
+Iteration 1: 52 samples, avg_loss=5.1348
+
+=== Iteration 2/2 ===
+Iteration 2: 52 samples, avg_loss=4.3439
+
+--- Evaluation at iteration 2 ---
+AI vs Random: W=4 L=6 D=0 (40.0%)
+AI vs Greedy: W=10 L=0 D=0 (100.0%) ⭐
+Baseline: Random vs Greedy: W=2 L=8 D=0 (20.0%)
+
+Model saved to blokus_model.pth
+```
+
+## 🔬 Technical Details
+
+### Value Perspective Convention
+
+- NN value always from **current player's perspective**
+- `encode_state_duo()` normalizes state to current player's view
+- MCTS backup negates value when going up tree
+- Terminal outcomes converted to current player's perspective
+
+### Legal Move Generation
+
+- Corner candidates: Empty cells diagonal to own tiles
+- Edge blocked: Empty cells orthogonal to own tiles (forbidden)
+- For each piece variant:
+  - Try aligning each piece cell with each corner
+  - Validate: no overlap, no edge-adjacency, in bounds
+  - First move must cover starting corner
+
+### Action Space
+
+- **Dynamic**: Only legal moves considered
+- **Scalable**: Works for any number of legal moves
+- NN scores each legal move (not fixed giant softmax)
+- Critical for Blokus (action space would be huge otherwise)
+
+## 🚧 Future Plans
+
+### Short-term
+
+- [ ] Longer training runs (50-100 iterations)
+- [ ] Hyperparameter tuning
+- [ ] Performance optimization (batched MCTS, caching)
+
+### Medium-term
+
+- [ ] 4-player Blokus support
+  - Value: scalar → vector (MaxN or Paranoid)
+  - MCTS: multi-player backup strategy
+  - Training: league play for diversity
+
+### Long-term
+
+- [ ] Mobile app with on-device inference
+- [ ] AR camera integration
+  - Board detection
+  - Piece recognition
+  - Move suggestion overlay
+
+## 🤝 Contributing
+
+This is a personal learning project, but suggestions and feedback are welcome!
+
+## 📝 License
+
+MIT License - see LICENSE file for details
+
+## 🙏 Acknowledgments
+
+- Based on AlphaZero principles (Silver et al., 2017)
+- Developed with Claude Code assistance
+- Inspired by the wonderful game of Blokus
+
+---
+
+**Last Updated**: 2026-01-11
+
+**Quick Links**:
+
+- [Training Guide](TRAINING_GUIDE.md)
+- [Visualization Guide](VISUALIZATION.md)
+- [Progress Log](PROGRESS.md)
