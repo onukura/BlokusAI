@@ -5,33 +5,89 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 This is an AlphaZero-style reinforcement learning AI for Blokus, a tile-placement board game. The project implements:
+
 - **Blokus Duo (2-player)** as the initial target, designed to extend to 4-player later
 - Self-play training using MCTS (Monte Carlo Tree Search) with neural network guidance
 - Intended for Google Colab (GPU) training
 - Future goal: Mobile app with AR camera overlay to suggest next moves on a physical board
 
+## Project Structure
+
+```shell
+BlokusAI/
+├── blokus_ai/          # Core implementation
+│   ├── pieces.py       # Blokus piece definitions
+│   ├── state.py        # Game state
+│   ├── engine.py       # Game engine & rules
+│   ├── encode.py       # State encoding for NN
+│   ├── net.py          # Neural network
+│   ├── mcts.py         # MCTS implementation
+│   ├── selfplay.py     # Self-play game generation
+│   ├── train.py        # Main training script
+│   ├── eval.py         # Model evaluation
+│   └── viz.py          # Visualization functions
+│
+├── scripts/            # Utility scripts
+│   ├── demo_viz.py     # Visualization demo
+│   ├── play_demo.py    # Random game demo
+│   ├── train_demo.py   # Quick training demo
+│   ├── monitor_training.sh  # Training monitor
+│   └── debug_*.py      # Debug utilities
+│
+├── tests/              # Unit tests
+│   ├── test_mcts.py
+│   ├── test_selfplay.py
+│   └── test_train.py
+│
+├── docs/               # Documentation
+│   ├── PROGRESS.md     # Development progress
+│   ├── TRAINING_GUIDE.md
+│   ├── VISUALIZATION.md
+│   ├── BUGFIXES.md
+│   └── blokus_ai_devlog.md
+│
+├── models/             # Saved models (gitignored)
+├── game_analysis/      # Visualization outputs (gitignored)
+├── README.md           # Main documentation
+└── pyproject.toml      # Project configuration
+```
+
 ## Commands
 
 ### Running Demo/Testing
+
 ```bash
 # Run a random game demo with visualization
-python play_demo.py
+uv run python scripts/play_demo.py
 
-# Run self-play training (minimal version)
-python train.py
+# Run visualization demo
+uv run python scripts/demo_viz.py
 
-# Run evaluation (when implemented)
-python eval.py
+# Analyze a game
+uv run python -m blokus_ai.analyze_game
 ```
 
 ### Training
-The project uses PyTorch. Training is designed for Google Colab but can run locally:
+
 ```bash
-# Basic self-play training loop
-python train.py
+# Quick test (1 iteration, no eval)
+uv run python -m blokus_ai.train test
+
+# Standard training (2 iterations with eval)
+uv run python -m blokus_ai.train quick
+
+# Full training (50 iterations)
+uv run python -m blokus_ai.train
 ```
 
-No requirements.txt exists yet - main dependencies are: `numpy`, `torch`, `matplotlib`
+### Evaluation
+
+```bash
+# Run baseline evaluation
+uv run python -m blokus_ai.eval
+```
+
+Dependencies are managed via `pyproject.toml` with uv.
 
 ## Architecture Overview
 
@@ -61,12 +117,12 @@ No requirements.txt exists yet - main dependencies are: `numpy`, `torch`, `matpl
 
 ### AI/Learning Pipeline
 
-4. **State Encoding** (`encode.py`)
+1. **State Encoding** (`encode.py`)
    - Converts `GameState` to neural network input from current player's perspective:
      - 5 channels: self occupancy, opponent occupancy, self corner candidates, self edge-blocked, opponent corners
    - `batch_move_features()`: Converts legal moves to feature tensors (piece ID, anchor position, size, cell list)
 
-5. **Neural Network** (`net.py`)
+2. **Neural Network** (`net.py`)
    - `PolicyValueNet`: ResNet-style convolutional encoder + two heads
    - **Policy head**: Scores each legal move by:
      - Extracting feature map values at cells the move would occupy
@@ -76,7 +132,7 @@ No requirements.txt exists yet - main dependencies are: `numpy`, `torch`, `matpl
    - **Value head**: Global average pooling + remaining pieces → tanh value estimate (-1 to +1)
    - **Important**: Policy operates on legal moves only (variable-size action space), NOT a fixed giant softmax
 
-6. **MCTS** (`mcts.py`)
+3. **MCTS** (`mcts.py`)
    - Minimal PUCT (Polynomial Upper Confidence Trees) implementation
    - Nodes store: state, legal moves, prior probabilities P (from NN policy), visit counts N, total values W
    - Selection: Picks move maximizing Q + U (exploitation + exploration)
@@ -84,18 +140,18 @@ No requirements.txt exists yet - main dependencies are: `numpy`, `torch`, `matpl
    - Backup: Propagates value up the tree, negating at each level (2-player zero-sum)
    - **Known simplification**: Value perspective handling is minimal (works for Duo but needs review for stability)
 
-7. **Self-Play** (`selfplay.py`)
+4. **Self-Play** (`selfplay.py`)
    - Plays full game using MCTS to generate improved policy π from visit counts
    - Stores training samples: (state encoding, legal moves, π, player ID)
    - Returns final game outcome (+1/0/-1 from player 0 perspective)
 
-8. **Training** (`train.py`)
+5. **Training** (`train.py`)
    - Self-play generates games
    - Policy loss: Cross-entropy between NN logits and MCTS visit distribution π
    - Value loss: MSE between NN value and actual game outcome
    - **Current**: Trains after each game individually (very basic, no replay buffer or batching across games)
 
-9. **Visualization** (`viz.py`)
+6. **Visualization** (`viz.py`)
    - Matplotlib rendering of board state
    - Shows corner candidates (purple outlines), edge-blocked cells (shaded)
    - Can preview candidate moves semi-transparently
@@ -131,6 +187,8 @@ Priority items from the development log:
 
 ## File Guide
 
+### Core Implementation (`blokus_ai/`)
+
 | File | Purpose |
 |------|---------|
 | `pieces.py` | Blokus piece definitions + variant generation |
@@ -140,11 +198,41 @@ Priority items from the development log:
 | `net.py` | ResNet-based policy/value network |
 | `mcts.py` | PUCT-based Monte Carlo Tree Search |
 | `selfplay.py` | Self-play game generation for training data |
-| `train.py` | Training loop (currently minimal) |
-| `eval.py` | Evaluation script (placeholder) |
-| `viz.py` | Matplotlib visualization of board and moves |
+| `train.py` | Main training loop with evaluation |
+| `train_medium.py` | Medium-length training script (20 iterations) |
+| `eval.py` | Evaluation against Random/Greedy baselines |
+| `viz.py` | Visualization functions (board, MCTS Top-K, heatmaps) |
+| `analyze_game.py` | Game replay analysis tool |
+
+### Scripts (`scripts/`)
+
+| File | Purpose |
+|------|---------|
+| `demo_viz.py` | Visualization demo (MCTS Top-5, heatmap) |
 | `play_demo.py` | Random game demo with visualization |
-| `blokus_ai_devlog.md` | Detailed design decisions and development history (Japanese) |
+| `train_demo.py` | Quick training demo (5 iterations) |
+| `monitor_training.sh` | Training progress monitor |
+| `debug_*.py` | Debug utilities for development |
+
+### Tests (`tests/`)
+
+| File | Purpose |
+|------|---------|
+| `test_mcts.py` | MCTS performance tests |
+| `test_selfplay.py` | Self-play tests |
+| `test_train.py` | Training component tests |
+
+### Documentation (`docs/`)
+
+| File | Purpose |
+|------|---------|
+| `PROGRESS.md` | Development progress log |
+| `TRAINING_GUIDE.md` | Comprehensive training guide |
+| `VISUALIZATION.md` | Visualization features guide |
+| `BUGFIXES.md` | Bug fix history |
+| `SESSION_SUMMARY.md` | Development session summary |
+| `blokus_ai_devlog.md` | Detailed design decisions (Japanese) |
+| `ROADMAP.md` | Future development roadmap |
 
 ## Important Context
 
@@ -152,4 +240,34 @@ Priority items from the development log:
 - Scoring is simplified (tile count) vs official Blokus rules (bonus for using all pieces, size of remaining pieces)
 - First move must cover player's designated starting corner (corners of board for 2p/4p)
 - Subsequent moves must touch own tiles diagonally but NOT orthogonally
-- Codebase is in early/prototype stage - several P0/P1 fixes needed before serious training
+- Core functionality is complete and tested (P0, P1, P2, P4 completed)
+- See `docs/BUGFIXES.md` for known issues and fixes
+- See `docs/PROGRESS.md` for current development status
+- See `docs/TRAINING_GUIDE.md` for training instructions
+
+## Development Status
+
+### Completed (2026-01-11)
+
+- ✅ Core game engine with legal move generation
+- ✅ MCTS implementation with value perspective consistency
+- ✅ Neural network (policy/value heads)
+- ✅ Self-play training pipeline
+- ✅ Evaluation system (vs Random, vs Greedy)
+- ✅ Advanced visualization (MCTS Top-K, heatmaps, game analysis)
+- ✅ Comprehensive documentation
+- ✅ Bug fix: analyze_game.py state reconstruction
+
+### Current Performance
+
+- AI vs Greedy: 100% win rate (after 2 training iterations)
+- AI vs Random: 40% win rate (early training)
+
+### Next Steps
+
+1. Long-term training (50-100 iterations)
+2. Performance optimization (optional)
+3. 4-player extension (future)
+4. Mobile app with AR (future)
+
+For detailed roadmap, see `docs/ROADMAP.md`.
