@@ -41,24 +41,25 @@ pip install numpy torch matplotlib
 
 ```bash
 # Test that everything works (15 seconds)
-uv run python train.py test
+uv run python -m blokus_ai.train test
 
 # Quick training with evaluation (2-3 minutes)
-uv run python train.py quick
+uv run python -m blokus_ai.train quick
 
 # Visualize AI thinking
-uv run python demo_viz.py
+uv run python scripts/demo_viz.py
 
 # Analyze a full game
-uv run python analyze_game.py
+uv run python scripts/analyze_game.py
 ```
 
 ## 📚 Documentation
 
-- **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)** - Comprehensive training guide
-- **[VISUALIZATION.md](VISUALIZATION.md)** - Visualization features guide
-- **[PROGRESS.md](PROGRESS.md)** - Development progress log
-- **[SESSION_SUMMARY.md](SESSION_SUMMARY.md)** - Latest session summary
+- **[TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md)** - Comprehensive training guide
+- **[VISUALIZATION.md](docs/VISUALIZATION.md)** - Visualization features guide
+- **[PROGRESS.md](docs/PROGRESS.md)** - Development progress log
+- **[SESSION_SUMMARY.md](docs/SESSION_SUMMARY.md)** - Latest session summary
+- **[ROADMAP.md](docs/ROADMAP.md)** - Future development roadmap
 - **[CLAUDE.md](CLAUDE.md)** - Project architecture (for Claude Code)
 - **[blokus_ai_devlog.md](blokus_ai_devlog.md)** - Detailed dev log (Japanese)
 
@@ -68,50 +69,50 @@ uv run python analyze_game.py
 
 ```bash
 # Quick test (1 iteration, no eval)
-uv run python train.py test
+uv run python -m blokus_ai.train test
 
 # Standard training (2 iterations with eval)
-uv run python train.py quick
+uv run python -m blokus_ai.train quick
 
 # Demo training (5 iterations, detailed output)
-uv run python train_demo.py
+uv run python scripts/train_demo.py
 
 # Medium training (20 iterations)
-uv run python train_medium.py
+uv run python scripts/train_medium.py
 
 # Full training (50 iterations)
-uv run python train.py
+uv run python -m blokus_ai.train
 ```
 
 ### Evaluation
 
 ```bash
 # Evaluate baseline (Random vs Greedy)
-uv run python eval.py
+uv run python -m blokus_ai.eval
 
 # Evaluate trained model (edit eval.py to load your model)
 # Uncomment the last section in eval.py, then:
-uv run python eval.py
+uv run python -m blokus_ai.eval
 ```
 
 ### Visualization
 
 ```bash
 # Visualize MCTS top-5 moves and heatmap
-uv run python demo_viz.py
+uv run python scripts/demo_viz.py
 
 # Analyze a complete game (6 key positions)
-uv run python analyze_game.py
+uv run python scripts/analyze_game.py
 
 # Random game demo
-uv run python play_demo.py
+uv run python scripts/play_demo.py
 ```
 
 ## 🏗️ Architecture
 
 ### Core Components
 
-```
+```shell
 ┌─────────────┐
 │  Self-Play  │ ← MCTS + Neural Network
 └──────┬──────┘
@@ -129,33 +130,33 @@ uv run python play_demo.py
 
 ### Key Files
 
-**Core Engine**:
+**Core Engine** (`blokus_ai/`):
 
 - `pieces.py` - Blokus piece definitions and rotations
 - `state.py` - Game state representation
 - `engine.py` - Legal move generation, game rules
 - `encode.py` - State → neural network input
 
-**Learning**:
+**Learning** (`blokus_ai/`):
 
 - `net.py` - ResNet-style policy/value network
 - `mcts.py` - Monte Carlo Tree Search (PUCT)
 - `selfplay.py` - Self-play game generation
 - `train.py` - Training loop
 
-**Analysis**:
+**Analysis** (`blokus_ai/` and `scripts/`):
 
 - `eval.py` - Model evaluation
 - `viz.py` - Visualization functions
-- `demo_viz.py` - Visualization demo
-- `analyze_game.py` - Game replay analysis
+- `scripts/demo_viz.py` - Visualization demo
+- `scripts/analyze_game.py` - Game replay analysis
 
 ## 🎨 Visualization Features
 
 ### MCTS Top-K Analysis
 
 ```bash
-uv run python demo_viz.py
+uv run python scripts/demo_viz.py
 ```
 
 Output: `mcts_top5.png`
@@ -174,7 +175,7 @@ Output: `move_heatmap.png`
 ### Game Analysis
 
 ```bash
-uv run python analyze_game.py
+uv run python scripts/analyze_game.py
 ```
 
 Output: `game_analysis/pos01-06_*.png` (12 images)
@@ -234,7 +235,7 @@ Uses PUCT (Polynomial Upper Confidence Trees):
 
 ## 📊 Training Progress Example
 
-```
+```shell
 === Iteration 1/2 ===
 Iteration 1: 52 samples, avg_loss=5.1348
 
@@ -317,6 +318,7 @@ MIT License - see LICENSE file for details
 
 **Quick Links**:
 
-- [Training Guide](TRAINING_GUIDE.md)
-- [Visualization Guide](VISUALIZATION.md)
-- [Progress Log](PROGRESS.md)
+- [Training Guide](docs/TRAINING_GUIDE.md)
+- [Visualization Guide](docs/VISUALIZATION.md)
+- [Progress Log](docs/PROGRESS.md)
+- [Roadmap](docs/ROADMAP.md)
