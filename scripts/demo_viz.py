@@ -21,7 +21,7 @@ def main():
 
         net.load_state_dict(torch.load("blokus_model.pth"))
         print("Loaded trained model")
-    except:
+    except Exception:
         print("Using untrained model")
 
     # Initialize game state

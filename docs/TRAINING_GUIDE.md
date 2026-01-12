@@ -132,7 +132,7 @@ pkill -f "python train.py"
 
 ```python
 # Colab セル
-!git clone https://github.com/yourusername/BlokusAI.git
+!git clone https://github.com/onukura/BlokusAI.git
 %cd BlokusAI
 !pip install -r requirements.txt
 

@@ -17,7 +17,7 @@ def main():
     try:
         net.load_state_dict(torch.load("blokus_model.pth"))
         print("Loaded trained model")
-    except:
+    except Exception:
         print("Using untrained model")
 
     samples, outcome = selfplay_game(net, num_simulations=30, temperature=1.0, seed=123)
@@ -67,11 +67,15 @@ def main():
 
     print(f"\nPlayer 0 corner candidates: {len(p0_corners[0])} cells")
     if len(p0_corners[0]) > 0:
-        print(f"  Positions (y,x): {list(zip(p0_corners[0], p0_corners[1]))[:5]}")
+        print(
+            f"  Positions (y,x): {list(zip(p0_corners[0], p0_corners[1], strict=False))[:5]}"
+        )
 
     print(f"Player 1 corner candidates: {len(p1_corners[0])} cells")
     if len(p1_corners[0]) > 0:
-        print(f"  Positions (y,x): {list(zip(p1_corners[0], p1_corners[1]))[:5]}")
+        print(
+            f"  Positions (y,x): {list(zip(p1_corners[0], p1_corners[1], strict=False))[:5]}"
+        )
 
     # Run MCTS to see what moves are considered
     print(f"\n=== Running MCTS for Player {state.turn} ===")

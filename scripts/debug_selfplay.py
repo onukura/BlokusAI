@@ -112,7 +112,7 @@ def main():
     try:
         net.load_state_dict(torch.load("blokus_model.pth"))
         print("Loaded trained model\n")
-    except:
+    except Exception:
         print("Using untrained model\n")
 
     samples = debug_selfplay_game(net, num_simulations=30, seed=123)

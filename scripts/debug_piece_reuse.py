@@ -16,7 +16,7 @@ def main():
     net = PolicyValueNet()
     try:
         net.load_state_dict(torch.load("blokus_model.pth"))
-    except:
+    except Exception:
         pass
 
     # Generate game with fixed seed

@@ -41,7 +41,7 @@ def test_legal_moves():
     corner_coords = np.where(corner_mask)
     print(f"Corner candidates for Player 0: {len(corner_coords[0])} cells")
     print(
-        f"Corner positions (y,x): {list(zip(corner_coords[0], corner_coords[1]))[:10]}"
+        f"Corner positions (y,x): {list(zip(corner_coords[0], corner_coords[1], strict=False))[:10]}"
     )
 
     # Check a specific move
