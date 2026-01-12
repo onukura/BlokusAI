@@ -280,6 +280,7 @@ Priority items from the development log:
 - See `docs/BUGFIXES.md` for known issues and fixes
 - See `docs/PROGRESS.md` for current development status
 - See `docs/TRAINING_GUIDE.md` for training instructions
+- Always update DEVELOPMENT_STATUS in `docs/PROGRESS.md` after major changes
 
 ## Development Status
 
