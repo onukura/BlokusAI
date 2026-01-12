@@ -15,7 +15,17 @@ from blokus_ai.viz import render_mcts_topk, render_move_heatmap
 
 
 def analyze_position(engine, net, state, position_num, output_dir="game_analysis"):
-    """Analyze a single position with MCTS."""
+    """MCTSで1局面を解析し、可視化を保存する。
+
+    上位5手とヒートマップを生成し、統計情報を表示。
+
+    Args:
+        engine: ゲームエンジン
+        net: ポリシーバリューネットワーク
+        state: 解析するゲーム状態
+        position_num: 局面番号（ファイル名用）
+        output_dir: 出力ディレクトリ
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\n=== Position {position_num} (Player {state.turn}) ===")
@@ -71,6 +81,11 @@ def analyze_position(engine, net, state, position_num, output_dir="game_analysis
 
 
 def main():
+    """自己対戦ゲームを生成し、要所をMCTS解析・可視化する。
+
+    訓練済みモデルがあれば読み込み、なければ未訓練で実行。
+    ゲームの要所（約6局面）を解析し、各局面の上位手とヒートマップを生成。
+    """
     print("Initializing...")
     net = PolicyValueNet()
 

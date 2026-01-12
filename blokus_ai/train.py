@@ -12,26 +12,66 @@ from blokus_ai.selfplay import Sample, selfplay_game
 
 
 class SelfPlayDataset(Dataset):
+    """自己対戦サンプルのPyTorchデータセット。
+
+    各サンプルに対してプレイヤー視点に応じた勝敗ラベルを付与。
+    """
     def __init__(self, samples: List[Sample], outcome: int):
+        """データセットを初期化する。
+
+        Args:
+            samples: 訓練サンプルのリスト
+            outcome: ゲーム結果（プレイヤー0視点で+1/0/-1）
+        """
         self.samples = samples
         self.outcome = outcome
 
     def __len__(self) -> int:
+        """データセットのサンプル数を返す。"""
         return len(self.samples)
 
     def __getitem__(self, idx: int):
+        """指定インデックスのサンプルと勝敗ラベルを返す。
+
+        Args:
+            idx: サンプルインデックス
+
+        Returns:
+            (Sample, 勝敗ラベル) サンプルのプレイヤー視点での勝敗
+        """
         sample = self.samples[idx]
         z = self.outcome if sample.player == 0 else -self.outcome
         return sample, z
 
 
 def collate_fn(batch):
+    """バッチをそのまま返すcollate関数（可変長の手リストのため）。
+
+    Args:
+        batch: サンプルのリスト
+
+    Returns:
+        そのままのバッチ
+    """
     return batch
 
 
 def train_epoch(
     net: PolicyValueNet, samples: List[Sample], outcome: int, batch_size: int = 8
 ) -> float:
+    """自己対戦サンプルでニューラルネットを1エポック訓練する。
+
+    ポリシー損失（交差エントロピー）とバリュー損失（MSE）の和を最小化。
+
+    Args:
+        net: ポリシーバリューネットワーク
+        samples: 訓練サンプルのリスト
+        outcome: ゲーム結果（プレイヤー0視点）
+        batch_size: バッチサイズ
+
+    Returns:
+        平均損失値
+    """
     dataset = SelfPlayDataset(samples, outcome)
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
@@ -76,15 +116,16 @@ def main(
     eval_interval: int = 5,
     save_path: str = "blokus_model.pth",
 ) -> None:
-    """
-    Training loop with periodic evaluation and model saving.
+    """定期評価とモデル保存を含む訓練ループ。
+
+    自己対戦→訓練→評価のサイクルを繰り返す。
 
     Args:
-        num_iterations: Number of training iterations
-        games_per_iteration: Number of self-play games per iteration
-        num_simulations: MCTS simulations per move
-        eval_interval: Evaluate every N iterations
-        save_path: Path to save the model
+        num_iterations: 訓練イテレーション回数
+        games_per_iteration: 各イテレーションでの自己対戦ゲーム数
+        num_simulations: 各手番でのMCTSシミュレーション回数
+        eval_interval: N回ごとに評価を実施
+        save_path: モデル保存先パス
     """
 
     import torch

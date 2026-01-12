@@ -17,6 +17,17 @@ def render_board(
     last_move: Move | None = None,
     preview_moves: Sequence[Move] | None = None,
 ) -> None:
+    """ゲームボードを可視化する。
+
+    ボード状態、最後の手（黒枠）、プレビュー手（紫半透明）、
+    コーナー候補（紫枠）、配置禁止セル（灰色）を表示。
+
+    Args:
+        engine: ゲームエンジン
+        state: 現在のゲーム状態
+        last_move: 最後の手（強調表示用）
+        preview_moves: プレビュー表示する手のリスト
+    """
     board = state.board
     h, w = board.shape
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -79,6 +90,14 @@ def render_board(
 def render_topk_moves(
     engine: Engine, state: GameState, moves: Sequence[Move], k: int = 5
 ) -> None:
+    """上位K個の手を適用後のボード状態で並べて表示する。
+
+    Args:
+        engine: ゲームエンジン
+        state: 現在のゲーム状態
+        moves: 候補手のリスト（先頭k個を表示）
+        k: 表示する手の数
+    """
     top = list(moves)[:k]
     fig, axes = plt.subplots(1, len(top), figsize=(3 * len(top), 3))
     if len(top) == 1:
@@ -116,17 +135,18 @@ def render_mcts_topk(
     k: int = 5,
     save_path: str | None = None,
 ) -> None:
-    """
-    Render top-K moves from MCTS with statistics.
+    """MCTSの上位K個の手を統計情報付きで表示する。
+
+    各手を適用後のボードと、訪問回数・Q値を表示。
 
     Args:
-        engine: Game engine
-        state: Current game state
-        moves: List of legal moves
-        visits: Visit counts for each move
-        values: Q-values for each move (optional)
-        k: Number of top moves to show
-        save_path: Path to save figure (optional)
+        engine: ゲームエンジン
+        state: 現在のゲーム状態
+        moves: 合法手のリスト
+        visits: 各手の訪問回数
+        values: 各手のQ値（オプション）
+        k: 表示する手の数
+        save_path: 画像保存先パス（オプション）
     """
     # Get top-k indices by visit count
     top_indices = np.argsort(visits)[::-1][:k]
@@ -201,15 +221,16 @@ def render_move_heatmap(
     weights: np.ndarray,
     save_path: str | None = None,
 ) -> None:
-    """
-    Render a heatmap showing move probability distribution across the board.
+    """ボード上の手の確率分布をヒートマップで表示する。
+
+    各手が占めるセルに重みを累積し、正規化してヒートマップ化。
 
     Args:
-        engine: Game engine
-        state: Current game state
-        moves: List of legal moves
-        weights: Weights/probabilities for each move
-        save_path: Path to save figure (optional)
+        engine: ゲームエンジン
+        state: 現在のゲーム状態
+        moves: 合法手のリスト
+        weights: 各手の重み/確率
+        save_path: 画像保存先パス（オプション）
     """
     board = state.board
     h, w = board.shape

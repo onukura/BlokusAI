@@ -8,7 +8,16 @@ from torch import nn
 
 
 class ResidualBlock(nn.Module):
+    """ResNet風の残差ブロック。
+
+    2層の畳み込み層とスキップ接続を持つ。
+    """
     def __init__(self, channels: int):
+        """残差ブロックを初期化する。
+
+        Args:
+            channels: 入出力チャネル数
+        """
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(channels)
@@ -17,6 +26,14 @@ class ResidualBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """順伝播。
+
+        Args:
+            x: 入力テンソル (B, C, H, W)
+
+        Returns:
+            出力テンソル (B, C, H, W)
+        """
         residual = x
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.bn2(self.conv2(x))
@@ -25,7 +42,15 @@ class ResidualBlock(nn.Module):
 
 
 class BoardEncoder(nn.Module):
+    """ボード状態をエンコードするResNetスタイルの畳み込みエンコーダ。"""
     def __init__(self, in_channels: int = 5, channels: int = 64, num_blocks: int = 4):
+        """ボードエンコーダを初期化する。
+
+        Args:
+            in_channels: 入力チャネル数（デフォルト5: state encoding）
+            channels: 内部特徴チャネル数
+            num_blocks: 残差ブロックの数
+        """
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, channels, 3, padding=1),
@@ -37,12 +62,26 @@ class BoardEncoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """順伝播。
+
+        Args:
+            x: 入力ボード (B, in_channels, H, W)
+
+        Returns:
+            エンコードされた特徴マップ (B, channels, H, W)
+        """
         x = self.stem(x)
         x = self.blocks(x)
         return x
 
 
 class PolicyValueNet(nn.Module):
+    """AlphaZero風のポリシー・バリューネットワーク。
+
+    共有エンコーダから2つのヘッドに分岐:
+    - ポリシーヘッド: 各合法手のスコア（可変長出力）
+    - バリューヘッド: 現在プレイヤー視点の局面評価値（-1～+1）
+    """
     def __init__(
         self,
         in_channels: int = 5,
@@ -50,6 +89,14 @@ class PolicyValueNet(nn.Module):
         num_blocks: int = 4,
         n_pieces: int = 21,
     ):
+        """ネットワークを初期化する。
+
+        Args:
+            in_channels: 入力チャネル数
+            channels: エンコーダの内部チャネル数
+            num_blocks: 残差ブロック数
+            n_pieces: ピース総数（デフォルト21）
+        """
         super().__init__()
         self.encoder = BoardEncoder(in_channels, channels, num_blocks)
         self.piece_embed = nn.Embedding(n_pieces, 16)
@@ -76,6 +123,17 @@ class PolicyValueNet(nn.Module):
         opp_rem: torch.Tensor,
         move_features: Dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """順伝播。
+
+        Args:
+            board: ボード状態 (B, C, H, W)
+            self_rem: 現在プレイヤーの残りピース (B, 21)
+            opp_rem: 相手プレイヤーの残りピース (B, 21)
+            move_features: 合法手の特徴量辞書
+
+        Returns:
+            (ポリシーロジット (N_moves,), バリュー (B,))
+        """
         fmap = self.encoder(board)
         logits = self._policy_logits(fmap, move_features)
         value = self._value(fmap, self_rem, opp_rem)
@@ -84,6 +142,18 @@ class PolicyValueNet(nn.Module):
     def _policy_logits(
         self, fmap: torch.Tensor, move_features: Dict[str, torch.Tensor]
     ) -> torch.Tensor:
+        """合法手ごとのポリシーロジットを計算する。
+
+        各手が占めるセルの特徴を平均し、ピース埋め込み・アンカー・
+        サイズと結合してMLPでスコアリング。
+
+        Args:
+            fmap: エンコードされた特徴マップ (1, C, H, W)
+            move_features: 指し手の特徴量辞書
+
+        Returns:
+            各手のロジット (N_moves,)
+        """
         piece_ids = move_features["piece_id"]
         anchors = move_features["anchor"]
         sizes = move_features["size"].unsqueeze(-1)
@@ -104,6 +174,19 @@ class PolicyValueNet(nn.Module):
     def _value(
         self, fmap: torch.Tensor, self_rem: torch.Tensor, opp_rem: torch.Tensor
     ) -> torch.Tensor:
+        """局面のバリュー評価値を計算する。
+
+        特徴マップをグローバル平均プーリングし、残りピース情報と
+        結合してMLPで評価値を出力。
+
+        Args:
+            fmap: エンコードされた特徴マップ (B, C, H, W)
+            self_rem: 現在プレイヤーの残りピース (B, 21)
+            opp_rem: 相手プレイヤーの残りピース (B, 21)
+
+        Returns:
+            評価値 (B,) [-1, +1]の範囲
+        """
         rem = torch.cat([self_rem, opp_rem], dim=1)
         value_input = torch.cat([self.value_head[:3](fmap).flatten(1), rem], dim=1)
         value = self.value_head[3:](value_input)
@@ -118,6 +201,21 @@ def predict(
     opp_rem: np.ndarray,
     move_features,
 ):
+    """ニューラルネットで局面を評価し、ポリシーとバリューを返す。
+
+    推論モードで勾配計算なしで実行。numpy配列を受け取り、
+    numpy/floatで結果を返す。
+
+    Args:
+        net: ポリシーバリューネットワーク
+        board: ボード状態 (C, H, W)
+        self_rem: 現在プレイヤーの残りピース (21,)
+        opp_rem: 相手プレイヤーの残りピース (21,)
+        move_features: 合法手の特徴量辞書
+
+    Returns:
+        (ポリシーロジット (N_moves,), バリュー (float))
+    """
     net.eval()
     board_t = torch.from_numpy(board[None]).float()
     self_rem_t = torch.from_numpy(self_rem[None]).float()

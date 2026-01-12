@@ -13,6 +13,16 @@ from blokus_ai.state import GameState
 
 @dataclass
 class Node:
+    """MCTSの探索ノード。
+
+    Attributes:
+        state: このノードが表すゲーム状態
+        moves: このノードからの合法手リスト
+        P: 各手の事前確率（NN policy出力）
+        N: 各手の訪問回数
+        W: 各手の累積価値
+        children: 子ノードへのマップ（手のインデックス -> Node）
+    """
     state: GameState
     moves: List[Move] = field(default_factory=list)
     P: np.ndarray | None = None
@@ -21,26 +31,51 @@ class Node:
     children: Dict[int, "Node"] = field(default_factory=dict)
 
     def is_expanded(self) -> bool:
+        """ノードが展開済みか（NNで評価済みか）判定する。
+
+        Returns:
+            事前確率Pが設定されていればTrue
+        """
         return self.P is not None
 
 
 class MCTS:
-    """
-    Monte Carlo Tree Search with PUCT selection.
+    """PUCT選択によるモンテカルロ木探索。
 
-    Value Perspective Convention:
-    - The NN value is always from the "current player's perspective" (the player whose turn it is)
-    - encode_state_duo() encodes the state from the current player's viewpoint
-    - When backing up values, we negate them because the parent node represents the opponent's turn
-    - Terminal outcomes are converted to the current player's perspective before returning
+    価値の視点に関する規約:
+    - NNの価値は常に「現在のプレイヤー視点」（手番プレイヤー）
+    - encode_state_duo()は現在プレイヤーの視点で状態をエンコード
+    - バックアップ時に価値を反転（親ノードは相手の手番のため）
+    - 終局時の結果は現在プレイヤー視点に変換してから返す
+
+    Attributes:
+        engine: ゲームエンジン
+        net: ポリシーバリューネットワーク
+        c_puct: PUCTの探索定数（UCBのバランス調整）
     """
 
     def __init__(self, engine: Engine, net: PolicyValueNet, c_puct: float = 1.5):
+        """MCTSを初期化する。
+
+        Args:
+            engine: ゲームエンジン
+            net: ポリシーバリューネットワーク
+            c_puct: PUCT探索定数（デフォルト1.5）
+        """
         self.engine = engine
         self.net = net
         self.c_puct = c_puct
 
     def run(self, root: Node, num_simulations: int = 50) -> np.ndarray:
+        """指定回数のシミュレーションを実行し、訪問回数を返す。
+
+        Args:
+            root: 探索の根ノード
+            num_simulations: シミュレーション回数
+
+        Returns:
+            各合法手の訪問回数配列
+        """
         for _ in range(num_simulations):
             self._simulate(root)
         visits = (
@@ -51,6 +86,17 @@ class MCTS:
         return visits
 
     def _simulate(self, node: Node) -> float:
+        """1回のシミュレーション（選択・展開・バックアップ）を実行する。
+
+        再帰的に木を降り、リーフノードを展開してNNで評価し、
+        価値を上方に伝播する。
+
+        Args:
+            node: 現在のノード
+
+        Returns:
+            このノードの視点での評価値
+        """
         # Check terminal first to avoid infinite loops
         if self.engine.is_terminal(node.state):
             outcome = self.engine.outcome_duo(node.state)
@@ -89,6 +135,17 @@ class MCTS:
         return -value
 
     def _expand(self, node: Node) -> float:
+        """ノードを展開し、NNで評価する。
+
+        合法手を生成し、NNでポリシーと価値を取得して
+        ノードに保存する。
+
+        Args:
+            node: 展開するノード
+
+        Returns:
+            NNが推定した評価値（現在プレイヤー視点）
+        """
         moves = self.engine.legal_moves(node.state)
         node.moves = moves
         if not moves:

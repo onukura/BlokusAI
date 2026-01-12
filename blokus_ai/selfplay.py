@@ -15,6 +15,17 @@ from blokus_ai.state import GameConfig
 
 @dataclass
 class Sample:
+    """自己対戦で生成される1ステップの訓練サンプル。
+
+    Attributes:
+        x: ボード状態エンコーディング (5, H, W)
+        self_rem: 現在プレイヤーの残りピース (21,)
+        opp_rem: 相手プレイヤーの残りピース (21,)
+        moves: この局面での合法手リスト
+        policy: MCTSが生成した改善ポリシー（訪問回数分布）
+        player: この局面のプレイヤーID
+        chosen_move_idx: 実際に選択された手のインデックス
+    """
     x: np.ndarray
     self_rem: np.ndarray
     opp_rem: np.ndarray
@@ -30,6 +41,20 @@ def selfplay_game(
     temperature: float = 1.0,
     seed: int | None = None,
 ) -> tuple[List[Sample], int]:
+    """ニューラルネットとMCTSを使って自己対戦ゲームを1試合プレイする。
+
+    各手番でMCTSを実行し、訪問回数から改善されたポリシーを生成。
+    温度パラメータで探索性を調整（温度が高いほどランダム性が増す）。
+
+    Args:
+        net: ポリシーバリューネットワーク
+        num_simulations: 各手番でのMCTSシミュレーション回数
+        temperature: サンプリング温度（1.0=訪問回数比例、0=greedy）
+        seed: 乱数シード（再現性のため）
+
+        Returns:
+        (訓練サンプルのリスト, ゲーム結果（プレイヤー0視点で+1/0/-1）)
+    """
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
