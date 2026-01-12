@@ -16,6 +16,7 @@ class SelfPlayDataset(Dataset):
 
     各サンプルに対してプレイヤー視点に応じた勝敗ラベルを付与。
     """
+
     def __init__(self, samples: List[Sample], outcome: int):
         """データセットを初期化する。
 
@@ -109,12 +110,40 @@ def train_epoch(
     return float(np.mean(losses)) if losses else 0.0
 
 
+def save_checkpoint(
+    net: PolicyValueNet, iteration: int, checkpoint_dir: str = "models/checkpoints"
+) -> str:
+    """イテレーション番号付きチェックポイントを保存する。
+
+    Args:
+        net: 保存するネットワーク
+        iteration: 現在のイテレーション番号
+        checkpoint_dir: 保存先ディレクトリ
+
+    Returns:
+        保存されたチェックポイントのパス
+    """
+    import os
+
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(
+        checkpoint_dir, f"checkpoint_iter_{iteration:04d}.pth"
+    )
+
+    torch.save(net.state_dict(), checkpoint_path)
+    return checkpoint_path
+
+
 def main(
     num_iterations: int = 10,
     games_per_iteration: int = 5,
     num_simulations: int = 30,
     eval_interval: int = 5,
     save_path: str = "blokus_model.pth",
+    past_generations: List[int] = None,
+    checkpoint_dir: str = "models/checkpoints",
+    save_checkpoints: bool = True,
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -126,10 +155,16 @@ def main(
         num_simulations: 各手番でのMCTSシミュレーション回数
         eval_interval: N回ごとに評価を実施
         save_path: モデル保存先パス
+        past_generations: 対戦する過去世代のリスト（例: [5, 10]）
+        checkpoint_dir: チェックポイント保存先ディレクトリ
+        save_checkpoints: チェックポイント保存を有効化
     """
+    if past_generations is None:
+        past_generations = [5, 10]
 
     import torch
-    from eval import evaluate_net
+
+    from blokus_ai.eval import evaluate_net_with_history
 
     net = PolicyValueNet()
     print(
@@ -171,8 +206,20 @@ def main(
             print(f"\n--- Evaluation at iteration {iteration + 1} ---")
             net.eval()
             with torch.no_grad():
-                evaluate_net(net, num_games=10, num_simulations=num_simulations)
+                evaluate_net_with_history(
+                    net,
+                    current_iter=iteration + 1,
+                    past_generations=past_generations,
+                    num_games=10,
+                    num_simulations=num_simulations,
+                    checkpoint_dir=checkpoint_dir,
+                )
             net.train()
+
+            # Save checkpoint
+            if save_checkpoints:
+                checkpoint_path = save_checkpoint(net, iteration + 1, checkpoint_dir)
+                print(f"Checkpoint saved to {checkpoint_path}")
 
             # Save model
             torch.save(net.state_dict(), save_path)
@@ -193,11 +240,16 @@ if __name__ == "__main__":
             games_per_iteration=1,
             num_simulations=10,
             eval_interval=999,
+            save_checkpoints=False,
         )
     elif len(sys.argv) > 1 and sys.argv[1] == "quick":
         # Quick test (light eval)
         main(
-            num_iterations=2, games_per_iteration=2, num_simulations=15, eval_interval=2
+            num_iterations=6,
+            games_per_iteration=2,
+            num_simulations=15,
+            eval_interval=2,
+            past_generations=[2],
         )
     else:
         # Full training
@@ -206,4 +258,5 @@ if __name__ == "__main__":
             games_per_iteration=10,
             num_simulations=30,
             eval_interval=10,
+            past_generations=[5, 10],
         )

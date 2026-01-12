@@ -157,6 +157,137 @@ def evaluate_net(
     evaluate_winrate("Random", random_policy, "Greedy", greedy_policy, num_games)
 
 
+def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
+    """チェックポイントをディスクから読み込む。
+
+    Args:
+        checkpoint_path: チェックポイントファイルのパス
+
+    Returns:
+        読み込まれたネットワーク（eval mode）
+
+    Raises:
+        FileNotFoundError: チェックポイントが存在しない場合
+    """
+    import os
+
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    net = PolicyValueNet()
+    net.load_state_dict(torch.load(checkpoint_path))
+    net.eval()
+    return net
+
+
+def evaluate_vs_past_checkpoint(
+    current_net: PolicyValueNet,
+    checkpoint_path: str,
+    checkpoint_iter: int,
+    num_games: int = 20,
+    num_simulations: int = 30,
+) -> dict | None:
+    """現在のモデルを過去チェックポイントと対戦評価する。
+
+    Args:
+        current_net: 現在のネットワーク
+        checkpoint_path: 過去チェックポイントのパス
+        checkpoint_iter: チェックポイントのイテレーション番号（表示用）
+        num_games: 試合数
+        num_simulations: MCTSシミュレーション回数
+
+    Returns:
+        勝利統計dict、チェックポイントが存在しない場合None
+    """
+    try:
+        past_net = load_checkpoint(checkpoint_path)
+    except FileNotFoundError:
+        print(f"  Checkpoint iter {checkpoint_iter} not found, skipping")
+        return None
+
+    print(f"\n--- vs Checkpoint (iter {checkpoint_iter}) ---")
+
+    def current_policy(engine, state):
+        return mcts_policy(current_net, engine, state, num_simulations)
+
+    def past_policy(engine, state):
+        return mcts_policy(past_net, engine, state, num_simulations)
+
+    stats = evaluate_winrate(
+        "Current",
+        current_policy,
+        f"Past(iter-{checkpoint_iter})",
+        past_policy,
+        num_games,
+    )
+
+    return stats
+
+
+def evaluate_net_with_history(
+    net: PolicyValueNet,
+    current_iter: int,
+    past_generations: list[int] = None,
+    num_games: int = 20,
+    num_simulations: int = 30,
+    checkpoint_dir: str = "models/checkpoints",
+) -> dict:
+    """ネットワークをベースライン+過去チェックポイントと評価。
+
+    Args:
+        net: 評価するネットワーク
+        current_iter: 現在の訓練イテレーション
+        past_generations: 対戦する世代差リスト（例: [5, 10]）
+        num_games: 各対戦の試合数
+        num_simulations: MCTSシミュレーション回数
+        checkpoint_dir: チェックポイントディレクトリ
+
+    Returns:
+        全評価結果を含むdict
+    """
+    import os
+
+    if past_generations is None:
+        past_generations = [5, 10]
+
+    results = {}
+
+    # 既存評価（Random, Greedy）
+    print(f"\n=== Evaluating NN (MCTS sims={num_simulations}) ===")
+
+    def ai_policy(engine, state):
+        return mcts_policy(net, engine, state, num_simulations)
+
+    evaluate_winrate("AI", ai_policy, "Random", random_policy, num_games)
+    evaluate_winrate("AI", ai_policy, "Greedy", greedy_policy, num_games)
+
+    print("\n--- Baseline ---")
+    evaluate_winrate("Random", random_policy, "Greedy", greedy_policy, num_games)
+
+    # 過去チェックポイント対戦
+    results["vs_past"] = {}
+    for gen in past_generations:
+        checkpoint_iter = current_iter - gen
+
+        if checkpoint_iter <= 0:
+            print(f"\n--- vs Checkpoint (iter {checkpoint_iter}) ---")
+            print(f"  Skipping: checkpoint iteration {checkpoint_iter} <= 0")
+            continue
+
+        checkpoint_path = os.path.join(
+            checkpoint_dir, f"checkpoint_iter_{checkpoint_iter:04d}.pth"
+        )
+
+        stats = evaluate_vs_past_checkpoint(
+            net, checkpoint_path, checkpoint_iter, num_games, num_simulations
+        )
+
+        if stats is not None:
+            results["vs_past"][gen] = stats
+
+    return results
+
+
 if __name__ == "__main__":
     # Baseline evaluation
     print("=== Baseline: Random vs Greedy ===")
