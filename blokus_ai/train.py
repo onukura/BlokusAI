@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from blokus_ai.device import get_device, get_device_name
 from blokus_ai.encode import batch_move_features
 from blokus_ai.net import PolicyValueNet
 from blokus_ai.replay_buffer import ReplayBuffer
@@ -70,7 +71,12 @@ def collate_fn(batch):
 
 
 def train_epoch(
-    net: PolicyValueNet, samples: List[Sample], outcomes: List[int], batch_size: int = 8
+    net: PolicyValueNet,
+    samples: List[Sample],
+    outcomes: List[int],
+    optimizer: torch.optim.Optimizer,
+    batch_size: int = 8,
+    max_grad_norm: float = 1.0,
 ) -> tuple[float, float, float]:
     """自己対戦サンプルでニューラルネットを1エポック訓練する。
 
@@ -80,7 +86,9 @@ def train_epoch(
         net: ポリシーバリューネットワーク
         samples: 訓練サンプルのリスト
         outcomes: ゲーム結果のリスト（各サンプルに対応、プレイヤー0視点）
+        optimizer: オプティマイザー（外部から渡される）
         batch_size: バッチサイズ
+        max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
 
     Returns:
         (平均損失値, 平均ポリシー損失, 平均バリュー損失)
@@ -89,8 +97,8 @@ def train_epoch(
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
     )
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
     net.train()
+    device = net.device  # ネットワークのデバイスを取得（効率化のため1回のみ）
     losses = []
     policy_losses_list = []
     value_losses_list = []
@@ -103,24 +111,34 @@ def train_epoch(
             move_features = batch_move_features(
                 sample.moves, sample.x.shape[1], sample.x.shape[2]
             )
+            # 入力テンソルをデバイスに移動
             move_tensors = {
-                "piece_id": torch.from_numpy(move_features["piece_id"]).long(),
-                "anchor": torch.from_numpy(move_features["anchor"]).float(),
-                "size": torch.from_numpy(move_features["size"]).float(),
+                "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
+                "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
+                "size": torch.from_numpy(move_features["size"]).float().to(device),
                 "cells": move_features["cells"],
             }
-            board = torch.from_numpy(sample.x[None]).float()
-            self_rem = torch.from_numpy(sample.self_rem[None]).float()
-            opp_rem = torch.from_numpy(sample.opp_rem[None]).float()
+            board = torch.from_numpy(sample.x[None]).float().to(device)
+            self_rem = torch.from_numpy(sample.self_rem[None]).float().to(device)
+            opp_rem = torch.from_numpy(sample.opp_rem[None]).float().to(device)
             logits, value = net(board, self_rem, opp_rem, move_tensors)
-            target_policy = torch.from_numpy(sample.policy).float()
+
+            # ターゲットテンソルもデバイスに移動
+            target_policy = torch.from_numpy(sample.policy).float().to(device)
+            target_value = torch.tensor(float(z), device=device)
+
             policy_loss = -(target_policy * torch.log_softmax(logits, dim=0)).sum()
-            value_loss = (value - torch.tensor(float(z))).pow(2).mean()
+            value_loss = (value - target_value).pow(2).mean()
             policy_losses.append(policy_loss)
             value_losses.append(value_loss)
 
         loss = torch.stack(policy_losses).mean() + torch.stack(value_losses).mean()
         loss.backward()
+
+        # Gradient clipping to prevent gradient explosion
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_grad_norm)
+
         optimizer.step()
 
         losses.append(float(loss.item()))
@@ -175,6 +193,10 @@ def main(
     batch_size: int = 32,
     num_training_steps: int = 100,
     min_buffer_size: int = 1000,
+    learning_rate: float = 1e-3,
+    max_grad_norm: float = 1.0,
+    use_lr_scheduler: bool = False,
+    eval_games: int = 10,
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -196,6 +218,10 @@ def main(
         batch_size: 訓練バッチサイズ
         num_training_steps: イテレーションごとの訓練ステップ数
         min_buffer_size: 訓練開始に必要な最小サンプル数
+        learning_rate: 学習率
+        max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
+        use_lr_scheduler: 学習率スケジューラーを使用
+        eval_games: 評価時の各対戦相手とのゲーム数
     """
     if past_generations is None:
         past_generations = [5, 10]
@@ -213,8 +239,11 @@ def main(
             "games_per_iteration": games_per_iteration,
             "num_simulations": num_simulations,
             "eval_interval": eval_interval,
+            "eval_games": eval_games,
             "past_generations": past_generations,
-            "learning_rate": 1e-3,
+            "learning_rate": learning_rate,
+            "max_grad_norm": max_grad_norm,
+            "use_lr_scheduler": use_lr_scheduler,
             "batch_size": batch_size,
             "temperature": 1.0,
             "game_type": "duo_2player",
@@ -227,10 +256,25 @@ def main(
     )
 
     net = PolicyValueNet()
+    device_name = get_device_name()
+    print(f"Using device: {device_name}")
     print(
         f"Starting training: {num_iterations} iterations, {games_per_iteration} games/iter"
     )
     print(f"MCTS simulations: {num_simulations}, eval interval: {eval_interval}")
+    print(f"Learning rate: {learning_rate}, max gradient norm: {max_grad_norm}")
+
+    # Initialize optimizer (persistent across iterations)
+    optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
+
+    # Initialize learning rate scheduler (optional)
+    scheduler = None
+    if use_lr_scheduler:
+        # Reduce LR on plateau: reduces LR when training loss stops improving
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        )
+        print("Learning rate scheduler enabled (ReduceLROnPlateau)")
 
     # Initialize replay buffer
     replay_buffer = ReplayBuffer(max_size=buffer_size) if use_replay_buffer else None
@@ -284,7 +328,8 @@ def main(
                 for step in range(num_training_steps):
                     samples, outcomes = replay_buffer.sample(batch_size)
                     avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
-                        net, samples, outcomes, batch_size=batch_size
+                        net, samples, outcomes, optimizer,
+                        batch_size=batch_size, max_grad_norm=max_grad_norm
                     )
                     losses.append(avg_loss)
                     policy_losses.append(avg_policy_loss)
@@ -295,7 +340,8 @@ def main(
                 mini_samples = [sample]
                 mini_outcomes = [all_outcomes[i]]
                 avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
-                    net, mini_samples, mini_outcomes, batch_size=1
+                    net, mini_samples, mini_outcomes, optimizer,
+                    batch_size=1, max_grad_norm=max_grad_norm
                 )
                 losses.append(avg_loss)
                 policy_losses.append(avg_policy_loss)
@@ -306,10 +352,19 @@ def main(
         avg_value_loss = float(np.mean(value_losses)) if value_losses else 0.0
         avg_game_length = float(np.mean(game_lengths)) if game_lengths else 0.0
 
+        # Update learning rate scheduler (if enabled)
+        current_lr = optimizer.param_groups[0]['lr']
+        if scheduler is not None and avg_loss > 0:
+            scheduler.step(avg_loss)
+            new_lr = optimizer.param_groups[0]['lr']
+            if new_lr != current_lr:
+                print(f"  Learning rate reduced: {current_lr:.6f} -> {new_lr:.6f}")
+                current_lr = new_lr
+
         print(
             f"Iteration {iteration + 1}: {len(all_samples)} samples, "
             f"avg_loss={avg_loss:.4f}, policy_loss={avg_policy_loss:.4f}, "
-            f"value_loss={avg_value_loss:.4f}"
+            f"value_loss={avg_value_loss:.4f}, lr={current_lr:.6f}"
         )
 
         # Log training metrics to WandB
@@ -318,6 +373,7 @@ def main(
             "train/avg_loss": avg_loss,
             "train/policy_loss": avg_policy_loss,
             "train/value_loss": avg_value_loss,
+            "train/learning_rate": current_lr,
             "selfplay/games_generated": games_per_iteration,
             "selfplay/total_samples": len(all_samples),
             "selfplay/avg_game_length": avg_game_length,
@@ -343,7 +399,7 @@ def main(
                     net,
                     current_iter=iteration + 1,
                     past_generations=past_generations,
-                    num_games=10,
+                    num_games=eval_games,
                     num_simulations=num_simulations,
                     checkpoint_dir=checkpoint_dir,
                 )
@@ -441,16 +497,20 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "quick":
         # Quick test (light eval, small replay buffer)
         main(
-            num_iterations=6,
+            num_iterations=10,
             games_per_iteration=2,
             num_simulations=15,
-            eval_interval=2,
-            past_generations=[2],
+            eval_interval=5,  # Less frequent evaluation for speed
+            eval_games=5,  # Fewer games per evaluation for speed
+            past_generations=[5],
             use_wandb=use_wandb,
-            buffer_size=500,
+            buffer_size=1000,
             batch_size=16,
             num_training_steps=20,
             min_buffer_size=100,
+            learning_rate=5e-4,
+            max_grad_norm=1.0,
+            use_lr_scheduler=False,
         )
     else:
         # Full training (AlphaZero-style with replay buffer)
@@ -460,9 +520,13 @@ if __name__ == "__main__":
             games_per_iteration=10,
             num_simulations=30,
             eval_interval=10,
+            eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,
             batch_size=32,
             num_training_steps=100,
             min_buffer_size=1000,
+            learning_rate=5e-4,
+            max_grad_norm=1.0,
+            use_lr_scheduler=True,
         )

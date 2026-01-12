@@ -6,6 +6,7 @@ from typing import Callable
 import numpy as np
 import torch
 
+from blokus_ai.device import get_device
 from blokus_ai.engine import Engine
 from blokus_ai.mcts import MCTS, Node
 from blokus_ai.net import PolicyValueNet
@@ -160,6 +161,8 @@ def evaluate_net(
 def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
     """チェックポイントをディスクから読み込む。
 
+    デバイス間での互換性を保証（CPU保存→GPU読込、GPU保存→CPU読込など）。
+
     Args:
         checkpoint_path: チェックポイントファイルのパス
 
@@ -174,8 +177,12 @@ def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    net = PolicyValueNet()
-    net.load_state_dict(torch.load(checkpoint_path))
+    device = get_device()
+    net = PolicyValueNet()  # 自動的にdeviceに移動される（__init__内で）
+
+    # map_locationでデバイス間の互換性を確保
+    state_dict = torch.load(checkpoint_path, map_location=device)
+    net.load_state_dict(state_dict)
     net.eval()
     return net
 

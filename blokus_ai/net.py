@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from blokus_ai.device import get_device, to_device
+
 
 class ResidualBlock(nn.Module):
     """ResNet風の残差ブロック。
@@ -116,6 +118,10 @@ class PolicyValueNet(nn.Module):
             nn.Tanh(),
         )
 
+        # デバイスに移動（TPU → GPU → CPU の優先順位）
+        self.device = get_device()
+        self.to(self.device)
+
     def forward(
         self,
         board: torch.Tensor,
@@ -217,14 +223,19 @@ def predict(
         (ポリシーロジット (N_moves,), バリュー (float))
     """
     net.eval()
-    board_t = torch.from_numpy(board[None]).float()
-    self_rem_t = torch.from_numpy(self_rem[None]).float()
-    opp_rem_t = torch.from_numpy(opp_rem[None]).float()
+    device = net.device  # ネットワークと同じデバイスを使用
+
+    # 入力をデバイスに移動
+    board_t = torch.from_numpy(board[None]).float().to(device)
+    self_rem_t = torch.from_numpy(self_rem[None]).float().to(device)
+    opp_rem_t = torch.from_numpy(opp_rem[None]).float().to(device)
     move_tensors = {
-        "piece_id": torch.from_numpy(move_features["piece_id"]).long(),
-        "anchor": torch.from_numpy(move_features["anchor"]).float(),
-        "size": torch.from_numpy(move_features["size"]).float(),
-        "cells": move_features["cells"],
+        "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
+        "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
+        "size": torch.from_numpy(move_features["size"]).float().to(device),
+        "cells": move_features["cells"],  # cellsはリストのままなのでデバイス移動不要
     }
     logits, value = net(board_t, self_rem_t, opp_rem_t, move_tensors)
+
+    # CPUに戻してnumpyに変換（後方互換性のため）
     return logits.cpu().numpy(), float(value.cpu().item())
