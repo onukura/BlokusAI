@@ -59,7 +59,7 @@ def collate_fn(batch):
 
 def train_epoch(
     net: PolicyValueNet, samples: List[Sample], outcome: int, batch_size: int = 8
-) -> float:
+) -> tuple[float, float, float]:
     """自己対戦サンプルでニューラルネットを1エポック訓練する。
 
     ポリシー損失（交差エントロピー）とバリュー損失（MSE）の和を最小化。
@@ -71,7 +71,7 @@ def train_epoch(
         batch_size: バッチサイズ
 
     Returns:
-        平均損失値
+        (平均損失値, 平均ポリシー損失, 平均バリュー損失)
     """
     dataset = SelfPlayDataset(samples, outcome)
     loader = DataLoader(
@@ -80,6 +80,9 @@ def train_epoch(
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
     net.train()
     losses = []
+    policy_losses_list = []
+    value_losses_list = []
+
     for batch in loader:
         optimizer.zero_grad()
         policy_losses = []
@@ -103,11 +106,20 @@ def train_epoch(
             value_loss = (value - torch.tensor(float(z))).pow(2).mean()
             policy_losses.append(policy_loss)
             value_losses.append(value_loss)
+
         loss = torch.stack(policy_losses).mean() + torch.stack(value_losses).mean()
         loss.backward()
         optimizer.step()
+
         losses.append(float(loss.item()))
-    return float(np.mean(losses)) if losses else 0.0
+        policy_losses_list.append(float(torch.stack(policy_losses).mean().item()))
+        value_losses_list.append(float(torch.stack(value_losses).mean().item()))
+
+    return (
+        float(np.mean(losses)) if losses else 0.0,
+        float(np.mean(policy_losses_list)) if policy_losses_list else 0.0,
+        float(np.mean(value_losses_list)) if value_losses_list else 0.0,
+    )
 
 
 def save_checkpoint(
@@ -144,6 +156,8 @@ def main(
     past_generations: List[int] = None,
     checkpoint_dir: str = "models/checkpoints",
     save_checkpoints: bool = True,
+    use_wandb: bool = True,
+    wandb_project: str = "BlokusAI",
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -158,6 +172,8 @@ def main(
         past_generations: 対戦する過去世代のリスト（例: [5, 10]）
         checkpoint_dir: チェックポイント保存先ディレクトリ
         save_checkpoints: チェックポイント保存を有効化
+        use_wandb: WandBログを有効化
+        wandb_project: WandBプロジェクト名
     """
     if past_generations is None:
         past_generations = [5, 10]
@@ -165,6 +181,24 @@ def main(
     import torch
 
     from blokus_ai.eval import evaluate_net_with_history
+    from blokus_ai.wandb_logger import WandBLogger
+
+    # Initialize WandB
+    wandb_logger = WandBLogger(
+        project_name=wandb_project,
+        config={
+            "num_iterations": num_iterations,
+            "games_per_iteration": games_per_iteration,
+            "num_simulations": num_simulations,
+            "eval_interval": eval_interval,
+            "past_generations": past_generations,
+            "learning_rate": 1e-3,
+            "batch_size": 8,
+            "temperature": 1.0,
+            "game_type": "duo_2player",
+        },
+        use_wandb=use_wandb,
+    )
 
     net = PolicyValueNet()
     print(
@@ -178,27 +212,57 @@ def main(
         # Self-play and training
         all_samples = []
         all_outcomes = []
+        game_lengths = []
+
         for game_idx in range(games_per_iteration):
             samples, outcome = selfplay_game(
                 net, num_simulations=num_simulations, temperature=1.0
             )
             all_samples.extend(samples)
             all_outcomes.extend([outcome] * len(samples))
+            game_lengths.append(len(samples))
 
         # Train on collected samples
         dataset = SelfPlayDataset(all_samples, 0)  # outcome is handled in __getitem__
         dataset.samples = all_samples
         # Update to use individual outcomes
         losses = []
+        policy_losses = []
+        value_losses = []
+
         for i, sample in enumerate(all_samples):
             mini_samples = [sample]
             outcome = all_outcomes[i]
-            loss = train_epoch(net, mini_samples, outcome, batch_size=1)
-            losses.append(loss)
+            avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
+                net, mini_samples, outcome, batch_size=1
+            )
+            losses.append(avg_loss)
+            policy_losses.append(avg_policy_loss)
+            value_losses.append(avg_value_loss)
 
         avg_loss = float(np.mean(losses)) if losses else 0.0
+        avg_policy_loss = float(np.mean(policy_losses)) if policy_losses else 0.0
+        avg_value_loss = float(np.mean(value_losses)) if value_losses else 0.0
+        avg_game_length = float(np.mean(game_lengths)) if game_lengths else 0.0
+
         print(
-            f"Iteration {iteration + 1}: {len(all_samples)} samples, avg_loss={avg_loss:.4f}"
+            f"Iteration {iteration + 1}: {len(all_samples)} samples, "
+            f"avg_loss={avg_loss:.4f}, policy_loss={avg_policy_loss:.4f}, "
+            f"value_loss={avg_value_loss:.4f}"
+        )
+
+        # Log training metrics to WandB
+        wandb_logger.log(
+            {
+                "train/iteration": iteration + 1,
+                "train/avg_loss": avg_loss,
+                "train/policy_loss": avg_policy_loss,
+                "train/value_loss": avg_value_loss,
+                "selfplay/games_generated": games_per_iteration,
+                "selfplay/total_samples": len(all_samples),
+                "selfplay/avg_game_length": avg_game_length,
+            },
+            step=iteration + 1,
         )
 
         # Periodic evaluation
@@ -206,7 +270,7 @@ def main(
             print(f"\n--- Evaluation at iteration {iteration + 1} ---")
             net.eval()
             with torch.no_grad():
-                evaluate_net_with_history(
+                eval_results = evaluate_net_with_history(
                     net,
                     current_iter=iteration + 1,
                     past_generations=past_generations,
@@ -216,10 +280,65 @@ def main(
                 )
             net.train()
 
+            # Log evaluation metrics to WandB
+            wandb_metrics = {}
+
+            # vs Random
+            if "vs_random" in eval_results:
+                stats = eval_results["vs_random"]
+                wandb_metrics.update({
+                    "eval/vs_random/winrate": stats["winrate"],
+                    "eval/vs_random/wins": stats["wins"],
+                    "eval/vs_random/losses": stats["losses"],
+                    "eval/vs_random/draws": stats["draws"],
+                })
+
+            # vs Greedy
+            if "vs_greedy" in eval_results:
+                stats = eval_results["vs_greedy"]
+                wandb_metrics.update({
+                    "eval/vs_greedy/winrate": stats["winrate"],
+                    "eval/vs_greedy/wins": stats["wins"],
+                    "eval/vs_greedy/losses": stats["losses"],
+                    "eval/vs_greedy/draws": stats["draws"],
+                })
+
+            # Baseline
+            if "baseline_random_vs_greedy" in eval_results:
+                stats = eval_results["baseline_random_vs_greedy"]
+                wandb_metrics.update({
+                    "eval/baseline_random_vs_greedy/winrate": stats["winrate"],
+                })
+
+            # vs Past generations
+            for gen, stats in eval_results.get("vs_past", {}).items():
+                wandb_metrics.update({
+                    f"eval/vs_past_gen_{gen}/winrate": stats["winrate"],
+                    f"eval/vs_past_gen_{gen}/wins": stats["wins"],
+                    f"eval/vs_past_gen_{gen}/losses": stats["losses"],
+                    f"eval/vs_past_gen_{gen}/draws": stats["draws"],
+                })
+
+            wandb_logger.log(wandb_metrics, step=iteration + 1)
+
             # Save checkpoint
             if save_checkpoints:
                 checkpoint_path = save_checkpoint(net, iteration + 1, checkpoint_dir)
                 print(f"Checkpoint saved to {checkpoint_path}")
+
+                # Upload checkpoint as WandB artifact
+                wandb_logger.log_artifact(
+                    artifact_path=checkpoint_path,
+                    artifact_name=f"checkpoint_iter_{iteration + 1:04d}",
+                    artifact_type="model",
+                    metadata={
+                        "iteration": iteration + 1,
+                        "avg_loss": avg_loss,
+                        "avg_policy_loss": avg_policy_loss,
+                        "avg_value_loss": avg_value_loss,
+                        "eval_results": eval_results,
+                    },
+                )
 
             # Save model
             torch.save(net.state_dict(), save_path)
@@ -229,18 +348,25 @@ def main(
     torch.save(net.state_dict(), save_path)
     print(f"\nTraining complete. Final model saved to {save_path}")
 
+    # Finish WandB run
+    wandb_logger.finish()
+
 
 if __name__ == "__main__":
     import sys
 
+    # Check for --no-wandb flag
+    use_wandb = "--no-wandb" not in sys.argv
+
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        # Ultra-fast test (no eval)
+        # Ultra-fast test (no eval, no wandb)
         main(
             num_iterations=1,
             games_per_iteration=1,
             num_simulations=10,
             eval_interval=999,
             save_checkpoints=False,
+            use_wandb=False,  # Always disable WandB for tests
         )
     elif len(sys.argv) > 1 and sys.argv[1] == "quick":
         # Quick test (light eval)
@@ -250,11 +376,13 @@ if __name__ == "__main__":
             num_simulations=15,
             eval_interval=2,
             past_generations=[2],
+            use_wandb=use_wandb,
         )
     else:
         # Full training
         main(
             num_iterations=50,
+            use_wandb=use_wandb,
             games_per_iteration=10,
             num_simulations=30,
             eval_interval=10,

@@ -258,11 +258,14 @@ def evaluate_net_with_history(
     def ai_policy(engine, state):
         return mcts_policy(net, engine, state, num_simulations)
 
-    evaluate_winrate("AI", ai_policy, "Random", random_policy, num_games)
-    evaluate_winrate("AI", ai_policy, "Greedy", greedy_policy, num_games)
+    # Capture results instead of just printing
+    results["vs_random"] = evaluate_winrate("AI", ai_policy, "Random", random_policy, num_games)
+    results["vs_greedy"] = evaluate_winrate("AI", ai_policy, "Greedy", greedy_policy, num_games)
 
     print("\n--- Baseline ---")
-    evaluate_winrate("Random", random_policy, "Greedy", greedy_policy, num_games)
+    results["baseline_random_vs_greedy"] = evaluate_winrate(
+        "Random", random_policy, "Greedy", greedy_policy, num_games
+    )
 
     # 過去チェックポイント対戦
     results["vs_past"] = {}
