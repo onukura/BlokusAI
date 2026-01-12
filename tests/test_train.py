@@ -20,9 +20,10 @@ def main():
 
     print("Training...")
     start = time.time()
-    loss = train_epoch(net, samples, outcome, batch_size=8)
+    outcomes = [outcome] * len(samples)
+    avg_loss, avg_policy_loss, avg_value_loss = train_epoch(net, samples, outcomes, batch_size=8)
     elapsed = time.time() - start
-    print(f"Training took {elapsed:.3f}s, loss={loss:.4f}")
+    print(f"Training took {elapsed:.3f}s, loss={avg_loss:.4f}, policy={avg_policy_loss:.4f}, value={avg_value_loss:.4f}")
 
 
 if __name__ == "__main__":
