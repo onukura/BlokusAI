@@ -9,9 +9,9 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "blokusai"
+name = "blokus-ai"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
