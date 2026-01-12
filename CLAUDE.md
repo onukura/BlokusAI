@@ -47,6 +47,8 @@ BlokusAI/
 │   └── blokus_ai_devlog.md
 │
 ├── models/             # Saved models (gitignored)
+│   ├── checkpoints/    # Training checkpoints (iteration-numbered)
+│   └── blokus_model.pth  # Latest model
 ├── game_analysis/      # Visualization outputs (gitignored)
 ├── README.md           # Main documentation
 └── pyproject.toml      # Project configuration
@@ -73,17 +75,32 @@ uv run python -m blokus_ai.analyze_game
 # Quick test (1 iteration, no eval)
 uv run python -m blokus_ai.train test
 
-# Standard training (2 iterations with eval)
+# Standard training (6 iterations with eval, past model comparison)
 uv run python -m blokus_ai.train quick
 
-# Full training (50 iterations)
+# Full training (50 iterations, evaluates vs 5 & 10 generations back)
 uv run python -m blokus_ai.train
+
+# Custom training
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=20,
+    eval_interval=5,
+    past_generations=[5, 10, 15],  # Compare against these generations
+)
+"
 ```
+
+**New Feature**: Training now saves iteration-numbered checkpoints and evaluates against past models to track learning progress.
 
 ### Evaluation
 
 ```bash
-# Run baseline evaluation
+# Run baseline evaluation (Random vs Greedy)
+uv run python -m blokus_ai.eval
+
+# Evaluate a trained model (uncomment code in eval.py first)
 uv run python -m blokus_ai.eval
 ```
 
@@ -149,9 +166,17 @@ Dependencies are managed via `pyproject.toml` with uv.
    - Self-play generates games
    - Policy loss: Cross-entropy between NN logits and MCTS visit distribution π
    - Value loss: MSE between NN value and actual game outcome
-   - **Current**: Trains after each game individually (very basic, no replay buffer or batching across games)
+   - **Checkpoint Management**: Saves iteration-numbered checkpoints at evaluation intervals
+   - **Current**: Trains after each game individually (no replay buffer yet)
 
-6. **Visualization** (`viz.py`)
+6. **Evaluation** (`eval.py`)
+   - **Baseline evaluation**: Random policy, Greedy policy (largest piece first)
+   - **MCTS policy**: Neural network + MCTS for move selection
+   - **Past model comparison**: Automatically evaluates current model vs N generations back
+   - **Progress tracking**: Measures improvement over training iterations
+   - Example output: `Current vs Past(iter-2): W=10 L=0 D=0 (100.0%)`
+
+7. **Visualization** (`viz.py`)
    - Matplotlib rendering of board state
    - Shows corner candidates (purple outlines), edge-blocked cells (shaded)
    - Can preview candidate moves semi-transparently
@@ -172,18 +197,29 @@ Dependencies are managed via `pyproject.toml` with uv.
 
 Priority items from the development log:
 
-1. **P0: Value target mismatch in training** - `train.py` currently uses a single `outcome` for the whole game. Should assign `z` per sample based on sample's player perspective: `z = outcome_p0 if player == 0 else -outcome_p0`. This is partially implemented but needs verification.
+### Completed ✅
 
-2. **P1: MCTS value perspective consistency** - The NN value and MCTS backup use different perspectives in places. Need to unify: either "always current player's perspective" or "always player 0's perspective" with clear sign-flipping rules.
+1. **P0: Value target mismatch** - ✅ Fixed: `z = outcome if player == 0 else -outcome`
+2. **P1: MCTS value perspective** - ✅ Clarified: Always current player's perspective
+3. **P2: Evaluation system** - ✅ Implemented: Random, Greedy, and past checkpoint evaluation
+4. **P4: Visualization** - ✅ Implemented: MCTS Top-K, heatmaps, game analysis
+5. **Bug fixes** - ✅ Fixed: Sample indexing bug, chosen move tracking bug
 
-3. **P2: Missing evaluation script** - `eval.py` exists but is not implemented. Should measure win rate vs random, vs greedy, vs past checkpoints.
+### In Progress / Planned
 
-4. **P3: Performance optimization**:
+1. **P3: Performance optimization**:
    - Legal move generation is Python loops (could use caching, bitboards, or smarter corner search)
    - MCTS is single-leaf expansion (no batching)
    - Move feature extraction in policy head is Python loop over cells
 
-5. **P4: Visualization improvements** - Connect MCTS top-K moves to `viz.py`, add replay viewer for self-play games.
+2. **Training improvements**:
+   - Replay buffer for sample diversity
+   - Hyperparameter tuning (MCTS simulations, learning rate, etc.)
+   - Longer training runs (50-100 iterations)
+
+3. **Future enhancements**:
+   - 4-player support
+   - Mobile app with AR overlay
 
 ## File Guide
 
@@ -198,9 +234,9 @@ Priority items from the development log:
 | `net.py` | ResNet-based policy/value network |
 | `mcts.py` | PUCT-based Monte Carlo Tree Search |
 | `selfplay.py` | Self-play game generation for training data |
-| `train.py` | Main training loop with evaluation |
+| `train.py` | Main training loop with checkpoint management and past model evaluation |
 | `train_medium.py` | Medium-length training script (20 iterations) |
-| `eval.py` | Evaluation against Random/Greedy baselines |
+| `eval.py` | Evaluation system (Random/Greedy/Past checkpoints) |
 | `viz.py` | Visualization functions (board, MCTS Top-K, heatmaps) |
 | `analyze_game.py` | Game replay analysis tool |
 
@@ -247,27 +283,49 @@ Priority items from the development log:
 
 ## Development Status
 
-### Completed (2026-01-11)
+### Completed (2026-01-12)
 
 - ✅ Core game engine with legal move generation
 - ✅ MCTS implementation with value perspective consistency
 - ✅ Neural network (policy/value heads)
 - ✅ Self-play training pipeline
-- ✅ Evaluation system (vs Random, vs Greedy)
+- ✅ **Evaluation system with past model comparison** (NEW)
+  - Random baseline
+  - Greedy baseline
+  - **N-generations-back checkpoint evaluation** 🎉
+- ✅ **Checkpoint management system** (NEW)
+  - Iteration-numbered checkpoints (`checkpoint_iter_NNNN.pth`)
+  - Automatic saving at evaluation intervals
 - ✅ Advanced visualization (MCTS Top-K, heatmaps, game analysis)
 - ✅ Comprehensive documentation
-- ✅ Bug fix: analyze_game.py state reconstruction
+- ✅ Bug fixes: State reconstruction, chosen move tracking
 
 ### Current Performance
 
 - AI vs Greedy: 100% win rate (after 2 training iterations)
 - AI vs Random: 40% win rate (early training)
+- **Current vs Past (2 gen back)**: 100% win rate (demonstrates learning progress) 🎯
+
+### Training Improvements (2026-01-12)
+
+Training now includes:
+
+- Automatic checkpoint saving at evaluation intervals
+- Progress tracking via past model comparison
+- Configurable generation gaps (default: 5, 10 generations back)
+- Example output:
+
+  ```shell
+  Current vs Past(iter-2): W=10 L=0 D=0 (100.0%)
+  Checkpoint saved to models/checkpoints/checkpoint_iter_0004.pth
+  ```
 
 ### Next Steps
 
-1. Long-term training (50-100 iterations)
-2. Performance optimization (optional)
-3. 4-player extension (future)
-4. Mobile app with AR (future)
+1. Long-term training (50-100 iterations) to observe full learning curve
+2. Replay buffer implementation for training stability
+3. Performance optimization (optional)
+4. 4-player extension (future)
+5. Mobile app with AR (future)
 
 For detailed roadmap, see `docs/ROADMAP.md`.

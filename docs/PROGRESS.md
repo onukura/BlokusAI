@@ -33,9 +33,24 @@
   - `analyze_game.py`: ゲームリプレイ分析スクリプト（6ポジション分析）
   - **成果**: 12枚の詳細な可視化画像を生成（game_analysis/）
 
+- ✅ **チェックポイントシステム** (2026-01-12)
+  - イテレーション番号付きチェックポイント自動保存
+  - `models/checkpoints/checkpoint_iter_NNNN.pth`形式
+  - 評価間隔ごとに保存（ディスク節約）
+  - `save_checkpoint()`関数で管理
+
+- ✅ **過去モデル対戦評価** (2026-01-12)
+  - N世代前のモデルとの自動対戦機能
+  - デフォルト: 5世代前・10世代前と対戦
+  - `load_checkpoint()`: チェックポイント読み込み
+  - `evaluate_vs_past_checkpoint()`: 過去モデル対戦
+  - `evaluate_net_with_history()`: 統合評価システム
+  - **テスト結果**: `Current vs Past(iter-2): W=10 L=0 D=0 (100.0%)` 🎯
+  - **成果**: 学習の進捗を定量的に測定可能に！
+
 ### 進行中のタスク
 
-- 🔄 **中期学習実行中**: 20 iterations, 5 games/iter, 25 simulations（バックグラウンド実行中）
+なし（現在全てのP0-P4タスク完了）
 
 ### 未着手（優先順）
 
@@ -46,31 +61,46 @@
 
 ## 次のアクション
 
-1. **本格的な学習実行**: デフォルトモードで長時間学習を実行（50 iterations）
-2. **P3**: パフォーマンス最適化（必要に応じて）
-3. **P4**: 可視化強化（MCTS TopK表示）
+1. **本格的な学習実行**: 50-100 iterationsで長期訓練を実行し、学習曲線を観察
+2. **リプレイバッファ実装**: 訓練の安定性向上（ROADMAP Phase 1, P1）
+3. **P3**: パフォーマンス最適化（ROADMAP Phase 1, P2）
+4. **Eloレーティングシステム**: 過去モデルとの相対的強さを追跡（ROADMAP Phase 1, P3）
 
 ## 学習の実行方法
 
 ```bash
 # テストモード（評価なし、最速）
-uv run python train.py test
+uv run python -m blokus_ai.train test
 
-# クイックモード（軽い評価付き）
-uv run python train.py quick
+# クイックモード（6 iterations, 2世代前と対戦）
+uv run python -m blokus_ai.train quick
 
-# フルモード（本格学習、50 iterations）
-uv run python train.py
+# フルモード（50 iterations, 5・10世代前と対戦）
+uv run python -m blokus_ai.train
+
+# カスタム設定
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=100,
+    eval_interval=10,
+    past_generations=[10, 20, 50],
+)
+"
 ```
+
+**新機能 (2026-01-12)**:
+- ✅ チェックポイント自動保存（`models/checkpoints/`）
+- ✅ 過去モデル対戦評価（進捗の定量測定）
 
 ## 評価の実行方法
 
 ```bash
-# ベースライン評価
-uv run python eval.py
+# ベースライン評価（Random vs Greedy）
+uv run python -m blokus_ai.eval
 
-# 学習済みモデルの評価（train.py実行後）
-# eval.pyの最後をコメント解除して実行
+# カスタム評価（過去モデル比較）
+# チェックポイントが存在する場合、自動的に比較される
 ```
 
 ## 実装済みファイル
@@ -86,10 +116,15 @@ uv run python eval.py
 
 ### 学習・評価
 
-- `selfplay.py`: 自己対戦データ生成
-- `train.py`: 学習ループ（評価統合、モデル保存、test/quick/fullモード）
+- `selfplay.py`: 自己対戦データ生成（chosen_move_idx追加済み）
+- `train.py`: 学習ループ（チェックポイント管理、過去モデル評価統合）
+  - `save_checkpoint()`: イテレーション番号付き保存
+  - `main()`: past_generations パラメータ対応
 - `train_medium.py`: 中期学習スクリプト（20 iterations）
-- `eval.py`: 評価機能（random, greedy, MCTS+NN）
+- `eval.py`: 評価システム（random, greedy, 過去モデル対戦）
+  - `load_checkpoint()`: チェックポイント読み込み
+  - `evaluate_vs_past_checkpoint()`: 過去モデル対戦
+  - `evaluate_net_with_history()`: 統合評価
 
 ### 可視化
 
