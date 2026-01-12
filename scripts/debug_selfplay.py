@@ -90,6 +90,7 @@ def debug_selfplay_game(net, num_simulations=30, seed=123):
             moves=root.moves,  # This is the list we're recording
             policy=policy,
             player=state.turn,
+            chosen_move_idx=choice,  # Store the actual move that was chosen
         )
         samples.append(sample)
 

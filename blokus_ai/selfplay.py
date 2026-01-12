@@ -21,6 +21,7 @@ class Sample:
     moves: List[Move]
     policy: np.ndarray
     player: int
+    chosen_move_idx: int  # Index of the move that was actually chosen
 
 
 def selfplay_game(
@@ -59,6 +60,7 @@ def selfplay_game(
                 moves=root.moves,
                 policy=policy,
                 player=state.turn,
+                chosen_move_idx=choice,  # Store the actual move that was chosen
             )
         )
         state = engine.apply_move(state, root.moves[choice])

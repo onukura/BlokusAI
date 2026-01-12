@@ -100,11 +100,11 @@ def main():
         # Note: sample i represents the state BEFORE move i is applied
         # So we reconstruct up to (but not including) sample_idx
         state = engine.initial_state()
-        for i in range(sample_idx):  # Changed from sample_idx + 1
+        for i in range(sample_idx):
             sample = samples[i]
-            # Find which move was chosen (from policy)
-            move_idx = int(np.argmax(sample.policy))
-            state = engine.apply_move(state, sample.moves[move_idx])
+            # Use the actual move that was chosen during self-play
+            # (NOT argmax of policy, since moves are sampled with temperature)
+            state = engine.apply_move(state, sample.moves[sample.chosen_move_idx])
 
         # Now 'state' is the position where sample_idx was recorded
         # This is the state we want to analyze
