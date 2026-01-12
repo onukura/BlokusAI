@@ -5,6 +5,7 @@ This document outlines the planned development trajectory for the BlokusAI proje
 ## Current Status (January 2026)
 
 ✅ **Completed**: Functional Blokus Duo (2-player) AI with complete training pipeline
+
 - Core game engine with legal move generation
 - MCTS + Policy/Value neural network
 - Self-play training loop
@@ -13,6 +14,7 @@ This document outlines the planned development trajectory for the BlokusAI proje
 - Comprehensive documentation
 
 **Current Performance**:
+
 - 100% win rate vs Greedy baseline
 - 40% win rate vs Random baseline (early training)
 - ~10-15 seconds per training iteration (2 games, 15 MCTS simulations)
@@ -355,21 +357,25 @@ This document outlines the planned development trajectory for the BlokusAI proje
 ## Success Metrics
 
 ### Phase 1 (Optimization)
+
 - Training 50 iterations in <30 minutes
 - 90%+ win rate vs Greedy
 - 80%+ win rate vs Random
 
 ### Phase 2 (4-Player)
+
 - Successfully learn 4-player strategy
 - Beat random 4-player baseline >60%
 - Identify strategic differences from 2-player
 
 ### Phase 3 (Advanced AI)
+
 - Competitive with human expert players
 - Solve Blokus Duo (if computationally feasible)
 - Publish reproducible results
 
 ### Phase 4 (Mobile AR)
+
 - 95%+ accuracy on board detection
 - 90%+ accuracy on piece recognition
 - <100ms latency for move suggestions
@@ -399,6 +405,7 @@ This document outlines the planned development trajectory for the BlokusAI proje
 This roadmap is a living document and will be updated as the project evolves. Suggestions, feedback, and contributions are welcome!
 
 **Priorities subject to change based on**:
+
 - Technical feasibility discoveries
 - Community interest
 - Available resources (time, compute)
