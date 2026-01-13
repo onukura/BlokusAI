@@ -53,9 +53,30 @@ uv run python scripts/demo_viz.py
 uv run python scripts/analyze_game.py
 ```
 
+### ☁️ Google Colab (GPU Training)
+
+Train BlokusAI in Google Colab with free GPU access!
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_USERNAME/BlokusAI/blob/main/notebooks/BlokusAI_Colab_Training.ipynb)
+
+**Quick steps:**
+1. Click the badge above to open in Colab
+2. Select **Runtime → Change runtime type → GPU**
+3. Run the cells in order
+4. Download your trained model!
+
+**Performance:**
+- 🚀 5-8x faster than CPU (T4 GPU)
+- ⚡ 50 iterations in 30-45 minutes
+- 💾 Free 15GB GPU memory
+
+See [docs/COLAB_SETUP.md](docs/COLAB_SETUP.md) for detailed setup guide.
+
 ## 📚 Documentation
 
 - **[TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md)** - Comprehensive training guide
+- **[COLAB_SETUP.md](docs/COLAB_SETUP.md)** - Google Colab setup guide
+- **[notebooks/](notebooks/)** - Colab notebooks for GPU training
 - **[VISUALIZATION.md](docs/VISUALIZATION.md)** - Visualization features guide
 - **[PROGRESS.md](docs/PROGRESS.md)** - Development progress log
 - **[SESSION_SUMMARY.md](docs/SESSION_SUMMARY.md)** - Latest session summary
