@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  blokus-ai:
+    build: .
+    image: blokus-ai:latest
+    container_name: blokus-ai-dev
+    volumes:
+      - .:/app
+      - ./models:/app/models
+      - ./game_analysis:/app/game_analysis
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    command: /bin/bash
