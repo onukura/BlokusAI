@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -172,6 +172,7 @@ class PolicyValueNet(nn.Module):
             move_vec = torch.stack(cell_feats, dim=0).mean(dim=0)
             move_vecs.append(move_vec)
         move_tensor = torch.stack(move_vecs, dim=0)
+
         piece_emb = self.piece_embed(piece_ids)
         features = torch.cat([move_tensor, piece_emb, anchors, sizes], dim=1)
         logits = self.policy_mlp(features).squeeze(-1)
@@ -239,3 +240,60 @@ def predict(
 
     # CPUに戻してnumpyに変換（後方互換性のため）
     return logits.cpu().numpy(), float(value.cpu().item())
+
+
+@torch.no_grad()
+def batch_predict(
+    net: PolicyValueNet,
+    boards: List[np.ndarray],
+    self_rems: List[np.ndarray],
+    opp_rems: List[np.ndarray],
+    move_features_list: List[Dict],
+) -> List[tuple[np.ndarray, float]]:
+    """複数の局面をバッチで評価する（MCTS高速化用）。
+
+    ボードエンコーダをバッチで実行することで、GPU利用率を向上させる。
+    ただしポリシーヘッドは手数が異なるため個別に実行。
+
+    Args:
+        net: ポリシーバリューネットワーク
+        boards: ボード状態のリスト [(C, H, W), ...]
+        self_rems: 残りピース (自分) のリスト [(21,), ...]
+        opp_rems: 残りピース (相手) のリスト [(21,), ...]
+        move_features_list: 合法手特徴量のリスト [dict, ...]
+
+    Returns:
+        [(ポリシーロジット, バリュー), ...] の各局面の結果リスト
+    """
+    if not boards:
+        return []
+
+    net.eval()
+    device = net.device
+
+    # ボードをバッチ化（これが主な高速化ポイント）
+    boards_t = torch.stack([torch.from_numpy(b) for b in boards]).float().to(device)
+    self_rems_t = torch.stack([torch.from_numpy(s) for s in self_rems]).float().to(device)
+    opp_rems_t = torch.stack([torch.from_numpy(o) for o in opp_rems]).float().to(device)
+
+    # バッチエンコード（高速！）
+    fmaps = net.encoder(boards_t)
+
+    # 各局面のポリシーとバリューを計算（手数が異なるため個別）
+    results = []
+    for i, move_features in enumerate(move_features_list):
+        move_tensors = {
+            "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
+            "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
+            "size": torch.from_numpy(move_features["size"]).float().to(device),
+            "cells": move_features["cells"],
+        }
+
+        # 個別のポリシー計算
+        logits = net._policy_logits(fmaps[i:i+1], move_tensors)
+        # 個別のバリュー計算
+        value = net._value(fmaps[i:i+1], self_rems_t[i:i+1], opp_rems_t[i:i+1])
+
+        results.append((logits.cpu().numpy(), float(value.cpu().item())))
+
+    return results

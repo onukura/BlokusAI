@@ -1,0 +1,53 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Python cache
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.pixi/
+
+# IDE
+.vscode/
+.idea/
+.cursorignore
+.cursorindexingignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# Training artifacts (large files)
+models/
+game_analysis/
+wandb/
+
+# Logs
+*.log
+*.txt
+
+# Others
+.env
+.envrc

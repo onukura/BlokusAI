@@ -212,3 +212,5 @@ __marimo__/
 *.crt
 wandb/
 models/
+
+third_party/

@@ -298,6 +298,139 @@ def evaluate_net_with_history(
     return results
 
 
+# Pentobi policy and evaluation functions
+_pentobi_engine_cache = {}
+
+
+def pentobi_policy(
+    engine: Engine,
+    state,
+    pentobi_level: int = 5,
+    pentobi_path: str = "pentobi_gtp",
+    game_history: list | None = None,
+) -> int:
+    """Pentobiエンジンを使用したポリシー関数。
+
+    Args:
+        engine: ゲームエンジン
+        state: 現在のゲーム状態
+        pentobi_level: Pentobiのエンジンレベル（1-8）
+        pentobi_path: pentobi_gtp実行ファイルのパス
+        game_history: ゲームの手の履歴（Moveオブジェクトのリスト）
+
+    Returns:
+        選択された手のインデックス（合法手がない場合は-1）
+
+    Note:
+        Pentobiエンジンインスタンスはキャッシュされ、レベルごとに再利用されます。
+    """
+    from blokus_ai.gtp_bridge import (
+        PentobiGTPEngine,
+        blokus_move_to_pentobi,
+        pentobi_move_to_blokus_index,
+    )
+
+    # 合法手を取得
+    moves = engine.legal_moves(state)
+    if not moves:
+        return -1
+
+    # Pentobiエンジンをキャッシュから取得または新規作成
+    cache_key = (pentobi_path, pentobi_level)
+    if cache_key not in _pentobi_engine_cache:
+        _pentobi_engine_cache[cache_key] = PentobiGTPEngine(
+            pentobi_path=pentobi_path,
+            game_variant="duo",
+            level=pentobi_level,
+            quiet=True,
+        )
+
+    pentobi_engine = _pentobi_engine_cache[cache_key]
+
+    # ゲーム履歴がある場合は再現
+    if game_history:
+        pentobi_engine.clear_board()
+        for move in game_history:
+            move_str = blokus_move_to_pentobi(move, board_size=engine.config.size)
+            pentobi_engine.play_move(move.player, move_str)
+
+    # Pentobiに手を生成させる
+    try:
+        pentobi_move = pentobi_engine.genmove(state.turn)
+
+        if pentobi_move.lower() == "pass":
+            return -1
+
+        # Pentobi形式の手をBlokusAIの合法手インデックスに変換
+        idx = pentobi_move_to_blokus_index(
+            pentobi_move, moves, board_size=engine.config.size
+        )
+        return idx
+    except Exception as e:
+        print(f"Warning: Pentobi move generation failed: {e}")
+        # エラー時はランダムにフォールバック
+        return random.randrange(len(moves))
+
+
+def evaluate_vs_pentobi(
+    net: PolicyValueNet,
+    num_games: int = 20,
+    num_simulations: int = 500,
+    pentobi_levels: list[int] = None,
+    pentobi_path: str = "pentobi_gtp",
+) -> dict:
+    """複数レベルのPentobiエンジンと対戦して評価。
+
+    Args:
+        net: 評価するポリシーバリューネットワーク
+        num_games: 各レベルとの試合数
+        num_simulations: MCTS AIのシミュレーション回数
+        pentobi_levels: 対戦するPentobiレベルのリスト（例: [3, 5, 7]）
+        pentobi_path: pentobi_gtp実行ファイルのパス
+
+    Returns:
+        各レベルとの対戦結果を含むdict
+        例: {"vs_pentobi_level_3": {"wins": 10, ...}, ...}
+    """
+    if pentobi_levels is None:
+        pentobi_levels = [3, 5, 7]
+
+    print(f"\n=== Evaluating vs Pentobi (levels: {pentobi_levels}) ===")
+
+    def ai_policy(engine, state):
+        return mcts_policy(net, engine, state, num_simulations)
+
+    results = {}
+    for level in pentobi_levels:
+        print(f"\n--- vs Pentobi Level {level} ---")
+
+        def pentobi_lv(engine, state):
+            return pentobi_policy(
+                engine, state, pentobi_level=level, pentobi_path=pentobi_path
+            )
+
+        stats = evaluate_winrate(
+            "AI", ai_policy, f"Pentobi-L{level}", pentobi_lv, num_games
+        )
+        results[f"vs_pentobi_level_{level}"] = stats
+
+    return results
+
+
+def cleanup_pentobi_engines():
+    """キャッシュされたPentobiエンジンをクリーンアップする。
+
+    プログラム終了時やテスト後に呼び出すことを推奨。
+    """
+    global _pentobi_engine_cache
+    for engine in _pentobi_engine_cache.values():
+        try:
+            engine.quit()
+        except Exception:
+            pass
+    _pentobi_engine_cache.clear()
+
+
 if __name__ == "__main__":
     # Baseline evaluation
     print("=== Baseline: Random vs Greedy ===")
@@ -307,3 +440,7 @@ if __name__ == "__main__":
     # net = PolicyValueNet()
     # net.load_state_dict(torch.load("model.pth"))
     # evaluate_net(net, num_games=20, num_simulations=30)
+
+    # To evaluate vs Pentobi, uncomment below:
+    # evaluate_vs_pentobi(net, num_games=20, num_simulations=500, pentobi_levels=[3, 5, 7])
+    # cleanup_pentobi_engines()

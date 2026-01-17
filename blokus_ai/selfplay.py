@@ -40,6 +40,7 @@ def selfplay_game(
     num_simulations: int = 500,
     temperature: float = 1.0,
     seed: int | None = None,
+    batch_size: int = 16,
 ) -> tuple[List[Sample], int]:
     """ニューラルネットとMCTSを使って自己対戦ゲームを1試合プレイする。
 
@@ -51,6 +52,7 @@ def selfplay_game(
         num_simulations: 各手番でのMCTSシミュレーション回数
         temperature: サンプリング温度（1.0=訪問回数比例、0=greedy）
         seed: 乱数シード（再現性のため）
+        batch_size: MCTSバッチサイズ（並列評価するリーフノード数）
 
         Returns:
         (訓練サンプルのリスト, ゲーム結果（プレイヤー0視点で+1/0/-1）)

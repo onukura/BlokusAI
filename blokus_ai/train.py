@@ -197,6 +197,7 @@ def main(
     max_grad_norm: float = 1.0,
     use_lr_scheduler: bool = False,
     eval_games: int = 10,
+    mcts_batch_size: int = 16,
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -222,6 +223,7 @@ def main(
         max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
         use_lr_scheduler: 学習率スケジューラーを使用
         eval_games: 評価時の各対戦相手とのゲーム数
+        mcts_batch_size: MCTSバッチサイズ（並列評価するリーフノード数）
     """
     if past_generations is None:
         past_generations = [5, 10]
@@ -238,6 +240,7 @@ def main(
             "num_iterations": num_iterations,
             "games_per_iteration": games_per_iteration,
             "num_simulations": num_simulations,
+            "mcts_batch_size": mcts_batch_size,
             "eval_interval": eval_interval,
             "eval_games": eval_games,
             "past_generations": past_generations,
@@ -296,7 +299,7 @@ def main(
 
         for game_idx in range(games_per_iteration):
             samples, outcome = selfplay_game(
-                net, num_simulations=num_simulations, temperature=1.0
+                net, num_simulations=num_simulations, temperature=1.0, batch_size=mcts_batch_size
             )
             all_samples.extend(samples)
             all_outcomes.extend([outcome] * len(samples))

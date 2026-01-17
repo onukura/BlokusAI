@@ -7,7 +7,7 @@ import numpy as np
 
 from blokus_ai.encode import batch_move_features, encode_state_duo
 from blokus_ai.engine import Engine, Move
-from blokus_ai.net import PolicyValueNet, predict
+from blokus_ai.net import PolicyValueNet, batch_predict, predict
 from blokus_ai.state import GameState
 
 
@@ -84,6 +84,218 @@ class MCTS:
             else np.zeros(len(root.moves), dtype=np.float32)
         )
         return visits
+
+    def run_batched(
+        self, root: Node, num_simulations: int = 500, batch_size: int = 8
+    ) -> np.ndarray:
+        """バッチ処理でシミュレーションを実行する（高速版）。
+
+        Virtual Lossを使用して複数パスを並行選択し、
+        リーフノードをバッチで評価することでGPU利用率を向上させる。
+
+        Args:
+            root: 探索の根ノード
+            num_simulations: シミュレーション回数
+            batch_size: バッチサイズ（同時に評価するリーフノード数）
+
+        Returns:
+            各合法手の訪問回数配列
+        """
+        VIRTUAL_LOSS = 3.0  # Virtual loss値（一時的に訪問回数に加算）
+
+        for batch_start in range(0, num_simulations, batch_size):
+            current_batch_size = min(batch_size, num_simulations - batch_start)
+
+            # 1. 複数パスを選択（Virtual Loss使用）
+            path_and_leaf_list = []
+            for _ in range(current_batch_size):
+                result = self._select_path_with_virtual_loss(root, VIRTUAL_LOSS)
+                if result:
+                    path_and_leaf_list.append(result)
+
+            if not path_and_leaf_list:
+                break
+
+            # 2. リーフノードを収集してバッチ展開
+            paths = [path for path, _ in path_and_leaf_list]
+            leaf_nodes = [leaf for _, leaf in path_and_leaf_list]
+            values = self._batch_expand(leaf_nodes)
+
+            # 3. バックアップとVirtual Loss削除
+            for path, value in zip(paths, values):
+                self._backup_path(path, value, VIRTUAL_LOSS)
+
+        visits = (
+            root.N
+            if root.N is not None
+            else np.zeros(len(root.moves), dtype=np.float32)
+        )
+        return visits
+
+    def _select_path_with_virtual_loss(
+        self, root: Node, virtual_loss: float
+    ) -> tuple[List[tuple[Node, int]], Node] | None:
+        """Virtual Lossを適用しながらリーフまでのパスを選択する。
+
+        Args:
+            root: 探索開始ノード
+            virtual_loss: 一時的に加算する訪問回数
+
+        Returns:
+            ([(ノード, アクション), ...], リーフノード) または None
+        """
+        path = []
+        node = root
+
+        while True:
+            # 終端チェック
+            if self.engine.is_terminal(node.state):
+                return (path, node)
+
+            # 展開されていない場合はリーフノード
+            if not node.is_expanded():
+                return (path, node)
+
+            # 合法手がない場合
+            if not node.moves:
+                return (path, node)
+
+            # PUCT選択
+            total_N = np.sum(node.N)
+            best_index = None
+            best_score = -float("inf")
+            for i in range(len(node.moves)):
+                q = node.W[i] / (node.N[i] + 1e-8)
+                u = (
+                    self.c_puct
+                    * node.P[i]
+                    * np.sqrt(total_N + 1e-8)
+                    / (1 + node.N[i])
+                )
+                score = q + u
+                if score > best_score:
+                    best_score = score
+                    best_index = i
+
+            if best_index is None:
+                return (path, node)
+
+            # Virtual Loss適用
+            node.N[best_index] += virtual_loss
+
+            # パスに追加
+            path.append((node, best_index))
+
+            # 子ノード作成または取得
+            if best_index not in node.children:
+                child_state = self.engine.apply_move(
+                    node.state, node.moves[best_index]
+                )
+                node.children[best_index] = Node(state=child_state)
+
+            node = node.children[best_index]
+
+    def _batch_expand(self, nodes: List[Node]) -> List[float]:
+        """複数のリーフノードをバッチで展開・評価する。
+
+        Args:
+            nodes: 展開するノードのリスト
+
+        Returns:
+            各ノードの評価値リスト
+        """
+        if not nodes:
+            return []
+
+        # データ準備
+        boards = []
+        self_rems = []
+        opp_rems = []
+        move_features_list = []
+        terminal_values = []  # 終端ノードの値
+        valid_indices = []  # 非終端ノードのインデックス
+
+        for i, node in enumerate(nodes):
+            # 終端チェック
+            if self.engine.is_terminal(node.state):
+                outcome = self.engine.outcome_duo(node.state)
+                player = node.state.turn
+                terminal_values.append(
+                    (i, float(outcome if player == 0 else -outcome))
+                )
+                continue
+
+            # 合法手生成
+            moves = self.engine.legal_moves(node.state)
+            node.moves = moves
+
+            if not moves:
+                # 合法手なし（パス状態）
+                terminal_values.append((i, 0.0))
+                continue
+
+            # 非終端ノード: バッチ評価用にデータ収集
+            x, self_rem, opp_rem = encode_state_duo(self.engine, node.state)
+            move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+
+            boards.append(x)
+            self_rems.append(self_rem)
+            opp_rems.append(opp_rem)
+            move_features_list.append(move_features)
+            valid_indices.append(i)
+
+        # バッチNN評価
+        if boards:
+            batch_results = batch_predict(
+                self.net, boards, self_rems, opp_rems, move_features_list
+            )
+        else:
+            batch_results = []
+
+        # 結果を統合
+        values = [0.0] * len(nodes)
+
+        # 終端ノードの値を設定
+        for i, value in terminal_values:
+            values[i] = value
+
+        # バッチ評価結果を設定
+        for (logits, value), node_idx in zip(batch_results, valid_indices):
+            node = nodes[node_idx]
+
+            # ノードにポリシーと訪問カウンタを設定
+            probs = np.exp(logits - np.max(logits))
+            probs = probs / np.sum(probs)
+            node.P = probs.astype(np.float32)
+            node.N = np.zeros(len(node.moves), dtype=np.float32)
+            node.W = np.zeros(len(node.moves), dtype=np.float32)
+
+            values[node_idx] = value
+
+        return values
+
+    def _backup_path(
+        self, path: List[tuple[Node, int]], value: float, virtual_loss: float
+    ) -> None:
+        """パスに沿って価値をバックアップし、Virtual Lossを削除する。
+
+        Args:
+            path: [(ノード, アクション), ...] のパス
+            value: リーフノードの評価値
+            virtual_loss: 削除するVirtual Loss値
+        """
+        for node, action in reversed(path):
+            # Virtual Loss削除
+            node.N[action] -= virtual_loss
+
+            # 実訪問カウント増加
+            node.N[action] += 1
+
+            # 価値蓄積
+            node.W[action] += value
+
+            # 価値反転（交互着手ゲーム）
+            value = -value
 
     def _simulate(self, node: Node) -> float:
         """1回のシミュレーション（選択・展開・バックアップ）を実行する。
