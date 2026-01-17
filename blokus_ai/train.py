@@ -180,7 +180,7 @@ def save_checkpoint(
 def main(
     num_iterations: int = 10,
     games_per_iteration: int = 5,
-    num_simulations: int = 30,
+    num_simulations: int = 500,  # Increased from 30 to 500 for proper MCTS search
     eval_interval: int = 5,
     save_path: str = "blokus_model.pth",
     past_generations: List[int] = None,
@@ -499,7 +499,7 @@ if __name__ == "__main__":
         main(
             num_iterations=10,
             games_per_iteration=2,
-            num_simulations=15,
+            num_simulations=300,  # Increased from 15 to 300 for proper MCTS
             eval_interval=5,  # Less frequent evaluation for speed
             eval_games=5,  # Fewer games per evaluation for speed
             past_generations=[5],
@@ -518,7 +518,7 @@ if __name__ == "__main__":
             num_iterations=50,
             use_wandb=use_wandb,
             games_per_iteration=10,
-            num_simulations=30,
+            num_simulations=500,  # Increased from 30 to 500 for proper MCTS
             eval_interval=10,
             eval_games=10,
             past_generations=[5, 10],

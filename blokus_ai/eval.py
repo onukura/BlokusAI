@@ -47,7 +47,7 @@ def greedy_policy(engine: Engine, state) -> int:
 
 
 def mcts_policy(
-    net: PolicyValueNet, engine: Engine, state, num_simulations: int = 30
+    net: PolicyValueNet, engine: Engine, state, num_simulations: int = 500
 ) -> int:
     """MCTSで最も訪問回数の多い手を選択するポリシー。
 
@@ -129,7 +129,7 @@ def evaluate_winrate(
 
 
 def evaluate_net(
-    net: PolicyValueNet, num_games: int = 20, num_simulations: int = 30
+    net: PolicyValueNet, num_games: int = 20, num_simulations: int = 500
 ) -> None:
     """訓練済みネットワークをランダム・貪欲ポリシーと対戦評価する。
 
@@ -192,7 +192,7 @@ def evaluate_vs_past_checkpoint(
     checkpoint_path: str,
     checkpoint_iter: int,
     num_games: int = 20,
-    num_simulations: int = 30,
+    num_simulations: int = 500,
 ) -> dict | None:
     """現在のモデルを過去チェックポイントと対戦評価する。
 
@@ -236,7 +236,7 @@ def evaluate_net_with_history(
     current_iter: int,
     past_generations: list[int] = None,
     num_games: int = 20,
-    num_simulations: int = 30,
+    num_simulations: int = 500,
     checkpoint_dir: str = "models/checkpoints",
 ) -> dict:
     """ネットワークをベースライン+過去チェックポイントと評価。

@@ -37,7 +37,7 @@ class Sample:
 
 def selfplay_game(
     net: PolicyValueNet,
-    num_simulations: int = 50,
+    num_simulations: int = 500,
     temperature: float = 1.0,
     seed: int | None = None,
 ) -> tuple[List[Sample], int]:
