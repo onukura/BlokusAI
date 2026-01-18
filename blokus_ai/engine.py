@@ -8,6 +8,14 @@ import numpy as np
 from blokus_ai.pieces import PIECES, Piece, PieceVariant
 from blokus_ai.state import GameConfig, GameState
 
+# Rust統合
+try:
+    import blokus_rust
+
+    USE_RUST = True
+except ImportError:
+    USE_RUST = False
+
 Cell = Tuple[int, int]
 
 
@@ -22,6 +30,7 @@ class Move:
         anchor: アンカー座標（コーナー候補の位置）
         cells: 配置される全セルの座標
     """
+
     player: int
     piece_id: int
     variant_id: int
@@ -42,6 +51,7 @@ class Engine:
         pieces: 全21種類のBlokusピース
         start_corners: 各プレイヤーの開始コーナー座標
     """
+
     def __init__(self, config: GameConfig):
         """エンジンを初期化する。
 
@@ -51,6 +61,21 @@ class Engine:
         self.config = config
         self.pieces: Tuple[Piece, ...] = PIECES
         self.start_corners = config.resolved_start_corners()
+
+        # Rust用のピースデータを事前に変換
+        if USE_RUST:
+            self._pieces_rust = self._convert_pieces_to_rust()
+
+    def _convert_pieces_to_rust(self):
+        """ピースデータをRust形式に変換"""
+        pieces = []
+        for piece in self.pieces:
+            variants = []
+            for variant in piece.variants:
+                cells = list(variant.cells)
+                variants.append(cells)
+            pieces.append(variants)
+        return pieces
 
     def initial_state(self) -> GameState:
         """初期ゲーム状態を生成する。
@@ -206,6 +231,46 @@ class Engine:
         """
         if player is None:
             player = state.turn
+
+        # Rust版を使用（利用可能な場合）
+        if USE_RUST:
+            board = state.board
+            first_done = state.first_move_done[player]
+
+            # コーナー候補を計算
+            if first_done:
+                corner_mask = self.corner_candidates(board, player)
+                ys, xs = np.where(corner_mask)
+                corner_candidates = list(zip(xs, ys))
+                start_corner = None
+            else:
+                corner_candidates = []
+                start_corner = self.start_corners[player]
+
+            # Rust版のlegal_movesを呼び出し
+            rust_moves = blokus_rust.legal_moves(
+                np.asarray(board, dtype=np.int32),
+                player,
+                np.asarray(state.remaining, dtype=bool),
+                first_done,
+                corner_candidates,
+                self._pieces_rust,
+                start_corner,
+            )
+
+            # Rust版のMove objectsをPython版に変換
+            return [
+                Move(
+                    player=m.player,
+                    piece_id=m.piece_id,
+                    variant_id=m.variant_id,
+                    anchor=m.anchor,
+                    cells=tuple(m.cells),
+                )
+                for m in rust_moves
+            ]
+
+        # Python版フォールバック
         board = state.board
         first_done = state.first_move_done[player]
         candidates = []
