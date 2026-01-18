@@ -10,6 +10,14 @@ from blokus_ai.engine import Engine, Move
 from blokus_ai.net import PolicyValueNet, batch_predict, predict
 from blokus_ai.state import GameState
 
+# Rust統合
+try:
+    import blokus_rust
+
+    USE_RUST_MCTS = True
+except ImportError:
+    USE_RUST_MCTS = False
+
 
 @dataclass
 class Node:
@@ -23,6 +31,7 @@ class Node:
         W: 各手の累積価値
         children: 子ノードへのマップ（手のインデックス -> Node）
     """
+
     state: GameState
     moves: List[Move] = field(default_factory=list)
     P: np.ndarray | None = None
@@ -160,25 +169,30 @@ class MCTS:
             if not node.moves:
                 return (path, node)
 
-            # PUCT選択
-            total_N = np.sum(node.N)
-            best_index = None
-            best_score = -float("inf")
-            for i in range(len(node.moves)):
-                q = node.W[i] / (node.N[i] + 1e-8)
-                u = (
-                    self.c_puct
-                    * node.P[i]
-                    * np.sqrt(total_N + 1e-8)
-                    / (1 + node.N[i])
+            # PUCT選択（Rust版使用可能な場合）
+            if USE_RUST_MCTS:
+                best_index = blokus_rust.select_best_action(
+                    node.W, node.N, node.P, self.c_puct
                 )
-                score = q + u
-                if score > best_score:
-                    best_score = score
-                    best_index = i
+            else:
+                total_N = np.sum(node.N)
+                best_index = None
+                best_score = -float("inf")
+                for i in range(len(node.moves)):
+                    q = node.W[i] / (node.N[i] + 1e-8)
+                    u = (
+                        self.c_puct
+                        * node.P[i]
+                        * np.sqrt(total_N + 1e-8)
+                        / (1 + node.N[i])
+                    )
+                    score = q + u
+                    if score > best_score:
+                        best_score = score
+                        best_index = i
 
-            if best_index is None:
-                return (path, node)
+                if best_index is None:
+                    return (path, node)
 
             # Virtual Loss適用
             node.N[best_index] += virtual_loss
@@ -188,9 +202,7 @@ class MCTS:
 
             # 子ノード作成または取得
             if best_index not in node.children:
-                child_state = self.engine.apply_move(
-                    node.state, node.moves[best_index]
-                )
+                child_state = self.engine.apply_move(node.state, node.moves[best_index])
                 node.children[best_index] = Node(state=child_state)
 
             node = node.children[best_index]
@@ -220,9 +232,7 @@ class MCTS:
             if self.engine.is_terminal(node.state):
                 outcome = self.engine.outcome_duo(node.state)
                 player = node.state.turn
-                terminal_values.append(
-                    (i, float(outcome if player == 0 else -outcome))
-                )
+                terminal_values.append((i, float(outcome if player == 0 else -outcome)))
                 continue
 
             # 合法手生成
@@ -326,18 +336,24 @@ class MCTS:
             player = node.state.turn
             return float(outcome if player == 0 else -outcome)
 
-        total_N = np.sum(node.N)
-        best_index = None
-        best_score = -float("inf")
-        for i in range(len(node.moves)):
-            q = node.W[i] / (node.N[i] + 1e-8)
-            u = self.c_puct * node.P[i] * np.sqrt(total_N + 1e-8) / (1 + node.N[i])
-            score = q + u
-            if score > best_score:
-                best_score = score
-                best_index = i
-        if best_index is None:
-            return 0.0
+        # PUCT選択（Rust版使用可能な場合）
+        if USE_RUST_MCTS:
+            best_index = blokus_rust.select_best_action(
+                node.W, node.N, node.P, self.c_puct
+            )
+        else:
+            total_N = np.sum(node.N)
+            best_index = None
+            best_score = -float("inf")
+            for i in range(len(node.moves)):
+                q = node.W[i] / (node.N[i] + 1e-8)
+                u = self.c_puct * node.P[i] * np.sqrt(total_N + 1e-8) / (1 + node.N[i])
+                score = q + u
+                if score > best_score:
+                    best_score = score
+                    best_index = i
+            if best_index is None:
+                return 0.0
         if best_index not in node.children:
             child_state = self.engine.apply_move(node.state, node.moves[best_index])
             node.children[best_index] = Node(state=child_state)

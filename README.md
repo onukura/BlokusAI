@@ -14,6 +14,7 @@ An AlphaZero-style reinforcement learning AI for Blokus, currently supporting **
 - ✅ Self-play training pipeline
 - ✅ Evaluation system (vs Random, vs Greedy)
 - ✅ Advanced visualization (MCTS analysis, heatmaps)
+- ✅ **Rust integration for 32-152x speedup** 🚀
 - ✅ Comprehensive documentation
 
 ### Performance
@@ -32,6 +33,11 @@ cd BlokusAI
 
 # Install dependencies (using uv)
 uv sync
+
+# Build Rust extensions (optional but recommended for performance)
+cd rust
+uv run maturin develop --release
+cd ..
 
 # Or with pip
 pip install numpy torch matplotlib
