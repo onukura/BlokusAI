@@ -22,10 +22,10 @@ class ResidualBlock(nn.Module):
         """
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(channels)
+        self.gn1 = nn.GroupNorm(8, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(channels)
+        self.gn2 = nn.GroupNorm(8, channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """順伝播。
@@ -37,8 +37,8 @@ class ResidualBlock(nn.Module):
             出力テンソル (B, C, H, W)
         """
         residual = x
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.bn2(self.conv2(x))
+        x = self.relu(self.gn1(self.conv1(x)))
+        x = self.gn2(self.conv2(x))
         x = self.relu(x + residual)
         return x
 
@@ -56,7 +56,7 @@ class BoardEncoder(nn.Module):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, channels, 3, padding=1),
-            nn.BatchNorm2d(channels),
+            nn.GroupNorm(8, channels),
             nn.ReLU(inplace=True),
         )
         self.blocks = nn.Sequential(
@@ -108,15 +108,23 @@ class PolicyValueNet(nn.Module):
             nn.Linear(128, 1),
         )
         self.value_head = nn.Sequential(
-            nn.Conv2d(channels, 32, 1),
+            nn.Conv2d(channels, 64, 1),
+            nn.GroupNorm(8, 64),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(32 + n_pieces * 2, 64),
+            nn.Linear(64 + n_pieces * 2, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 1),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(128, 1),
             nn.Tanh(),
         )
+
+        # Initialize weights before moving to device
+        self._initialize_weights()
 
         # デバイスに移動（TPU → GPU → CPU の優先順位）
         self.device = get_device()
@@ -195,9 +203,36 @@ class PolicyValueNet(nn.Module):
             評価値 (B,) [-1, +1]の範囲
         """
         rem = torch.cat([self_rem, opp_rem], dim=1)
-        value_input = torch.cat([self.value_head[:3](fmap).flatten(1), rem], dim=1)
-        value = self.value_head[3:](value_input)
+        value_input = torch.cat([self.value_head[:4](fmap).flatten(1), rem], dim=1)
+        value = self.value_head[4:](value_input)
         return value.squeeze(-1)
+
+    def _initialize_weights(self):
+        """Initialize network weights following AlphaZero best practices."""
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                # He/Kaiming initialization for ReLU activations
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                # Xavier/Glorot initialization
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.GroupNorm):
+                # GroupNorm standard initialization
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Embedding):
+                # Embedding standard initialization
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+
+        # Special: Value head final layer uses small weights
+        # This prevents extreme initial predictions
+        value_final_linear = self.value_head[-2]  # Second-to-last (before tanh)
+        nn.init.uniform_(value_final_linear.weight, -0.003, 0.003)
+        nn.init.constant_(value_final_linear.bias, 0)
 
 
 @torch.no_grad()

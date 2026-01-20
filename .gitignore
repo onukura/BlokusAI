@@ -214,3 +214,15 @@ wandb/
 models/
 
 third_party/
+
+# Temporary diagnostic and test scripts
+diagnose_*.py
+train_test_*.py
+train_fixed.py
+train_architecture_test*.py
+analyze_*.py
+quick_diagnose.py
+inspect_*.py
+test_single_game.py
+monitor_*.sh
+*.backup

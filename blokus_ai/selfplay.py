@@ -66,7 +66,7 @@ def selfplay_game(
     samples: List[Sample] = []
     while not engine.is_terminal(state):
         root = Node(state=state)
-        visits = mcts.run(root, num_simulations=num_simulations)
+        visits = mcts.run_batched(root, num_simulations=num_simulations, batch_size=batch_size)
         if visits.sum() == 0:
             state.turn = state.next_player()
             continue

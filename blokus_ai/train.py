@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import List
+import os
+from multiprocessing import Pool, cpu_count
+from typing import List, Tuple
 
 import numpy as np
 import torch
@@ -77,6 +79,8 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     batch_size: int = 8,
     max_grad_norm: float = 1.0,
+    policy_loss_weight: float = 1.0,
+    value_loss_weight: float = 0.1,
 ) -> tuple[float, float, float]:
     """自己対戦サンプルでニューラルネットを1エポック訓練する。
 
@@ -132,7 +136,7 @@ def train_epoch(
             policy_losses.append(policy_loss)
             value_losses.append(value_loss)
 
-        loss = torch.stack(policy_losses).mean() + torch.stack(value_losses).mean()
+        loss = policy_loss_weight * torch.stack(policy_losses).mean() + value_loss_weight * torch.stack(value_losses).mean()
         loss.backward()
 
         # Gradient clipping to prevent gradient explosion
@@ -150,6 +154,93 @@ def train_epoch(
         float(np.mean(policy_losses_list)) if policy_losses_list else 0.0,
         float(np.mean(value_losses_list)) if value_losses_list else 0.0,
     )
+
+
+def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], int]:
+    """マルチプロセス用の自己対戦ゲーム実行ラッパー。
+
+    各プロセスで独立してモデルをロードし、自己対戦を実行する。
+
+    Args:
+        args: (net_state_dict, num_simulations, temperature, seed, batch_size)
+
+    Returns:
+        (訓練サンプルのリスト, ゲーム結果)
+    """
+    net_state_dict, num_simulations, temperature, seed, batch_size = args
+
+    # 各プロセスでモデルを再構築
+    net = PolicyValueNet()
+    net.load_state_dict(net_state_dict)
+    net.eval()
+
+    # 自己対戦を実行
+    with torch.no_grad():
+        samples, outcome = selfplay_game(
+            net,
+            num_simulations=num_simulations,
+            temperature=temperature,
+            seed=seed,
+            batch_size=batch_size,
+        )
+
+    return samples, outcome
+
+
+def run_parallel_selfplay_games(
+    net: PolicyValueNet,
+    num_games: int,
+    num_simulations: int,
+    temperature: float,
+    batch_size: int,
+    num_workers: int | None = None,
+) -> List[Tuple[List[Sample], int]]:
+    """複数の自己対戦ゲームを並列実行する。
+
+    Args:
+        net: ポリシーバリューネットワーク
+        num_games: 実行するゲーム数
+        num_simulations: 各手番でのMCTSシミュレーション回数
+        temperature: サンプリング温度
+        batch_size: MCTSバッチサイズ
+        num_workers: 並列ワーカー数（Noneの場合はCPUコア数を使用）
+
+    Returns:
+        [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
+    """
+    if num_workers is None:
+        # デフォルトはCPUコア数（最大8）
+        num_workers = min(cpu_count(), 8)
+
+    # 並列化が無効または1ゲームのみの場合は逐次実行
+    if num_workers <= 1 or num_games == 1:
+        results = []
+        for game_idx in range(num_games):
+            with torch.no_grad():
+                samples, outcome = selfplay_game(
+                    net,
+                    num_simulations=num_simulations,
+                    temperature=temperature,
+                    seed=game_idx,
+                    batch_size=batch_size,
+                )
+            results.append((samples, outcome))
+        return results
+
+    # モデルの状態を取得（各プロセスで共有）
+    net_state_dict = net.state_dict()
+
+    # 各ゲーム用の引数を準備
+    args_list = [
+        (net_state_dict, num_simulations, temperature, game_idx, batch_size)
+        for game_idx in range(num_games)
+    ]
+
+    # マルチプロセスで並列実行
+    with Pool(num_workers) as pool:
+        results = pool.map(_run_single_selfplay_game, args_list)
+
+    return results
 
 
 def save_checkpoint(
@@ -194,10 +285,13 @@ def main(
     num_training_steps: int = 100,
     min_buffer_size: int = 1000,
     learning_rate: float = 1e-3,
+    policy_loss_weight: float = 1.0,
+    value_loss_weight: float = 0.1,
     max_grad_norm: float = 1.0,
     use_lr_scheduler: bool = False,
     eval_games: int = 10,
     mcts_batch_size: int = 16,
+    num_workers: int | None = None,
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -220,10 +314,13 @@ def main(
         num_training_steps: イテレーションごとの訓練ステップ数
         min_buffer_size: 訓練開始に必要な最小サンプル数
         learning_rate: 学習率
+        policy_loss_weight: ポリシー損失の重み（デフォルト1.0）
+        value_loss_weight: バリュー損失の重み（デフォルト0.1）
         max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
         use_lr_scheduler: 学習率スケジューラーを使用
         eval_games: 評価時の各対戦相手とのゲーム数
         mcts_batch_size: MCTSバッチサイズ（並列評価するリーフノード数）
+        num_workers: 並列ワーカー数（Noneの場合はCPUコア数、最大8）
     """
     if past_generations is None:
         past_generations = [5, 10]
@@ -245,6 +342,8 @@ def main(
             "eval_games": eval_games,
             "past_generations": past_generations,
             "learning_rate": learning_rate,
+            "policy_loss_weight": policy_loss_weight,
+            "value_loss_weight": value_loss_weight,
             "max_grad_norm": max_grad_norm,
             "use_lr_scheduler": use_lr_scheduler,
             "batch_size": batch_size,
@@ -275,7 +374,7 @@ def main(
     if use_lr_scheduler:
         # Reduce LR on plateau: reduces LR when training loss stops improving
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5, verbose=True
+            optimizer, mode='min', factor=0.5, patience=5
         )
         print("Learning rate scheduler enabled (ReduceLROnPlateau)")
 
@@ -292,15 +391,24 @@ def main(
     for iteration in range(num_iterations):
         print(f"\n=== Iteration {iteration + 1}/{num_iterations} ===")
 
-        # Self-play and training
+        # Self-play (parallel execution)
         all_samples = []
         all_outcomes = []
         game_lengths = []
 
-        for game_idx in range(games_per_iteration):
-            samples, outcome = selfplay_game(
-                net, num_simulations=num_simulations, temperature=1.0, batch_size=mcts_batch_size
-            )
+        print(f"  Running {games_per_iteration} self-play games"
+              f"{f' (parallel: {num_workers} workers)' if (num_workers is None or num_workers > 1) and games_per_iteration > 1 else ' (sequential)'}...")
+
+        results = run_parallel_selfplay_games(
+            net=net,
+            num_games=games_per_iteration,
+            num_simulations=num_simulations,
+            temperature=1.0,
+            batch_size=mcts_batch_size,
+            num_workers=num_workers,
+        )
+
+        for samples, outcome in results:
             all_samples.extend(samples)
             all_outcomes.extend([outcome] * len(samples))
             game_lengths.append(len(samples))
@@ -332,7 +440,9 @@ def main(
                     samples, outcomes = replay_buffer.sample(batch_size)
                     avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
                         net, samples, outcomes, optimizer,
-                        batch_size=batch_size, max_grad_norm=max_grad_norm
+                        batch_size=batch_size, max_grad_norm=max_grad_norm,
+                        policy_loss_weight=policy_loss_weight,
+                        value_loss_weight=value_loss_weight
                     )
                     losses.append(avg_loss)
                     policy_losses.append(avg_policy_loss)
@@ -344,7 +454,9 @@ def main(
                 mini_outcomes = [all_outcomes[i]]
                 avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
                     net, mini_samples, mini_outcomes, optimizer,
-                    batch_size=1, max_grad_norm=max_grad_norm
+                    batch_size=1, max_grad_norm=max_grad_norm,
+                    policy_loss_weight=policy_loss_weight,
+                    value_loss_weight=value_loss_weight
                 )
                 losses.append(avg_loss)
                 policy_losses.append(avg_policy_loss)
@@ -521,7 +633,8 @@ if __name__ == "__main__":
             num_iterations=50,
             use_wandb=use_wandb,
             games_per_iteration=10,
-            num_simulations=500,  # Increased from 30 to 500 for proper MCTS
+            num_simulations=100,  # Balanced for speed vs quality
+            num_workers=1,  # Sequential execution (multiprocessing has issues)
             eval_interval=10,
             eval_games=10,
             past_generations=[5, 10],
