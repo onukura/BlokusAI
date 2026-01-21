@@ -148,7 +148,8 @@ def train_epoch(
                 board = torch.from_numpy(x_transformed[None]).float().to(device)
                 self_rem = torch.from_numpy(sample.self_rem[None]).float().to(device)
                 opp_rem = torch.from_numpy(sample.opp_rem[None]).float().to(device)
-                logits, value = net(board, self_rem, opp_rem, move_tensors)
+                game_phase_t = torch.tensor([sample.game_phase], dtype=torch.float32, device=device)
+                logits, value = net(board, self_rem, opp_rem, move_tensors, game_phase_t)
 
                 # ターゲットテンソルもデバイスに移動
                 target_policy = torch.from_numpy(sample.policy).float().to(device)

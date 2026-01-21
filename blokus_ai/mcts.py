@@ -5,7 +5,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from blokus_ai.encode import batch_move_features, encode_state_duo
+from blokus_ai.encode import batch_move_features, encode_state_duo_v2
 from blokus_ai.engine import Engine, Move
 from blokus_ai.net import PolicyValueNet, batch_predict, predict
 from blokus_ai.state import GameState
@@ -382,6 +382,7 @@ class MCTS:
         boards = []
         self_rems = []
         opp_rems = []
+        game_phases = []
         move_features_list = []
         terminal_values = []  # 終端ノードの値
         valid_indices = []  # 非終端ノードのインデックス
@@ -403,19 +404,20 @@ class MCTS:
                 continue
 
             # 非終端ノード: バッチ評価用にデータ収集
-            x, self_rem, opp_rem = encode_state_duo(self.engine, node.state)
+            x, self_rem, opp_rem, game_phase = encode_state_duo_v2(self.engine, node.state)
             move_features = batch_move_features(moves, x.shape[1], x.shape[2])
 
             boards.append(x)
             self_rems.append(self_rem)
             opp_rems.append(opp_rem)
+            game_phases.append(game_phase)
             move_features_list.append(move_features)
             valid_indices.append(i)
 
         # バッチNN評価
         if boards:
             batch_results = batch_predict(
-                self.net, boards, self_rems, opp_rems, move_features_list
+                self.net, boards, self_rems, opp_rems, move_features_list, game_phases
             )
         else:
             batch_results = []
@@ -556,9 +558,9 @@ class MCTS:
             # Non-terminal pass state - return neutral value
             # This shouldn't normally be reached as selfplay.py handles passes
             return 0.0
-        x, self_rem, opp_rem = encode_state_duo(self.engine, node.state)
+        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(self.engine, node.state)
         move_features = batch_move_features(moves, x.shape[1], x.shape[2])
-        logits, value = predict(self.net, x, self_rem, opp_rem, move_features)
+        logits, value = predict(self.net, x, self_rem, opp_rem, move_features, game_phase)
         probs = np.exp(logits - np.max(logits))
         probs = probs / np.sum(probs)
 
