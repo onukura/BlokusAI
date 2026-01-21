@@ -215,6 +215,9 @@ models/
 
 third_party/
 
+# Archive directory (historical experiments and debug scripts)
+archive/
+
 # Temporary diagnostic and test scripts
 diagnose_*.py
 train_test_*.py
@@ -226,3 +229,4 @@ inspect_*.py
 test_single_game.py
 monitor_*.sh
 *.backup
+*.stats
