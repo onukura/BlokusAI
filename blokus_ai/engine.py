@@ -371,3 +371,64 @@ class Engine:
         if scores[0] < scores[1]:
             return -1
         return 0
+
+    def outcome_duo_normalized(
+        self, state: GameState, normalize_range: float = 50.0
+    ) -> float:
+        """2プレイヤーゲームの勝敗をスコア差ベースで正規化して計算する。
+
+        スコア差を正規化してtanh()で[-1, +1]に変換する。
+        これにより、Value headがより細かい局面評価を学習できる。
+
+        Args:
+            state: ゲーム状態
+            normalize_range: 正規化範囲（デフォルト50.0）
+                           50タイル差でtanh(1.0) ≈ 0.76
+
+        Returns:
+            プレイヤー0視点の正規化された勝敗値（-1.0～+1.0の実数）
+        """
+        scores = self.score(state)
+        score_diff = float(scores[0] - scores[1])
+        return float(np.tanh(score_diff / normalize_range))
+
+    def score_official(self, state: GameState) -> np.ndarray:
+        """公式Blokusルールで各プレイヤーのスコアを計算する。
+
+        - ベーススコア: 配置タイル数
+        - +15ボーナス: 全ピース使用
+        - （最終手がモノミノの+5ボーナスは未実装）
+
+        Args:
+            state: ゲーム状態
+
+        Returns:
+            各プレイヤーのスコア配列
+        """
+        scores = np.zeros(state.remaining.shape[0], dtype=int)
+        for player in range(state.remaining.shape[0]):
+            # ベーススコア: 配置タイル数
+            tiles_placed = int(np.sum(state.board == (player + 1)))
+            scores[player] = tiles_placed
+
+            # 全ピース使用ボーナス
+            if not state.remaining[player].any():  # 残りピースが0
+                scores[player] += 15
+
+        return scores
+
+    def outcome_duo_official_normalized(
+        self, state: GameState, normalize_range: float = 60.0
+    ) -> float:
+        """公式スコアリングを使用した正規化outcome。
+
+        Args:
+            state: ゲーム状態
+            normalize_range: 正規化範囲（デフォルト60.0、ボーナス込み）
+
+        Returns:
+            プレイヤー0視点の正規化された勝敗値（-1.0～+1.0の実数）
+        """
+        scores = self.score_official(state)
+        score_diff = float(scores[0] - scores[1])
+        return float(np.tanh(score_diff / normalize_range))

@@ -47,7 +47,13 @@ def greedy_policy(engine: Engine, state) -> int:
 
 
 def mcts_policy(
-    net: PolicyValueNet, engine: Engine, state, num_simulations: int = 500, batch_size: int = 16
+    net: PolicyValueNet,
+    engine: Engine,
+    state,
+    num_simulations: int = 500,
+    batch_size: int = 16,
+    use_batched_mcts: bool = False,
+    add_dirichlet_noise: bool = False,
 ) -> int:
     """MCTSで最も訪問回数の多い手を選択するポリシー。
 
@@ -57,6 +63,8 @@ def mcts_policy(
         state: 現在のゲーム状態
         num_simulations: MCTSシミュレーション回数
         batch_size: MCTSバッチサイズ（並列評価するリーフノード数）
+        use_batched_mcts: バッチMCTSを使用するか（デフォルトFalse=標準MCTS）
+        add_dirichlet_noise: Dirichletノイズを追加するか（評価時はFalse推奨）
 
     Returns:
         選択された手のインデックス（合法手がない場合は-1）
@@ -66,7 +74,19 @@ def mcts_policy(
         return -1
     mcts = MCTS(engine, net)
     root = Node(state=state)
-    visits = mcts.run_batched(root, num_simulations=num_simulations, batch_size=batch_size)
+
+    if use_batched_mcts:
+        visits = mcts.run_batched(
+            root,
+            num_simulations=num_simulations,
+            batch_size=batch_size,
+            add_dirichlet_noise=add_dirichlet_noise,
+        )
+    else:
+        visits = mcts.run(
+            root, num_simulations=num_simulations, add_dirichlet_noise=add_dirichlet_noise
+        )
+
     if visits.sum() == 0:
         return -1
     return int(np.argmax(visits))

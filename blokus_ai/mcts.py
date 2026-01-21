@@ -75,16 +75,33 @@ class MCTS:
         self.net = net
         self.c_puct = c_puct
 
-    def run(self, root: Node, num_simulations: int = 50) -> np.ndarray:
+    def run(
+        self,
+        root: Node,
+        num_simulations: int = 50,
+        add_dirichlet_noise: bool = False,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
+    ) -> np.ndarray:
         """指定回数のシミュレーションを実行し、訪問回数を返す。
+
+        AlphaZeroスタイルで、ルートノードにDirichletノイズを追加して
+        探索の多様性を向上させる。
 
         Args:
             root: 探索の根ノード
             num_simulations: シミュレーション回数
+            add_dirichlet_noise: ルートノードにDirichletノイズを追加するか
+            dirichlet_alpha: Dirichlet分布のalphaパラメータ（デフォルト0.3）
+            dirichlet_epsilon: ノイズ混合率（デフォルト0.25）
 
         Returns:
             各合法手の訪問回数配列
         """
+        # ルートノードを事前展開（Dirichletノイズ付き）
+        if not root.is_expanded():
+            self._expand(root, add_dirichlet_noise, dirichlet_alpha, dirichlet_epsilon)
+
         for _ in range(num_simulations):
             self._simulate(root)
         visits = (
@@ -95,7 +112,13 @@ class MCTS:
         return visits
 
     def run_batched(
-        self, root: Node, num_simulations: int = 500, batch_size: int = 8
+        self,
+        root: Node,
+        num_simulations: int = 500,
+        batch_size: int = 8,
+        add_dirichlet_noise: bool = False,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
     ) -> np.ndarray:
         """バッチ処理でシミュレーションを実行する（高速版）。
 
@@ -106,11 +129,18 @@ class MCTS:
             root: 探索の根ノード
             num_simulations: シミュレーション回数
             batch_size: バッチサイズ（同時に評価するリーフノード数）
+            add_dirichlet_noise: ルートノードにDirichletノイズを追加するか
+            dirichlet_alpha: Dirichlet分布のalphaパラメータ（デフォルト0.3）
+            dirichlet_epsilon: ノイズ混合率（デフォルト0.25）
 
         Returns:
             各合法手の訪問回数配列
         """
         VIRTUAL_LOSS = 3.0  # Virtual loss値（一時的に訪問回数に加算）
+
+        # ルートノードを事前展開（Dirichletノイズ付き）
+        if not root.is_expanded():
+            self._expand(root, add_dirichlet_noise, dirichlet_alpha, dirichlet_epsilon)
 
         for batch_start in range(0, num_simulations, batch_size):
             current_batch_size = min(batch_size, num_simulations - batch_start)
@@ -362,14 +392,24 @@ class MCTS:
         node.W[best_index] += value
         return -value
 
-    def _expand(self, node: Node) -> float:
+    def _expand(
+        self,
+        node: Node,
+        add_dirichlet_noise: bool = False,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
+    ) -> float:
         """ノードを展開し、NNで評価する。
 
         合法手を生成し、NNでポリシーと価値を取得して
-        ノードに保存する。
+        ノードに保存する。オプションでDirichletノイズを追加し、
+        探索の多様性を向上させる。
 
         Args:
             node: 展開するノード
+            add_dirichlet_noise: Dirichletノイズを追加するか（ルートノード用）
+            dirichlet_alpha: Dirichlet分布のalphaパラメータ（デフォルト0.3）
+            dirichlet_epsilon: ノイズ混合率（デフォルト0.25）
 
         Returns:
             NNが推定した評価値（現在プレイヤー視点）
@@ -392,6 +432,12 @@ class MCTS:
         logits, value = predict(self.net, x, self_rem, opp_rem, move_features)
         probs = np.exp(logits - np.max(logits))
         probs = probs / np.sum(probs)
+
+        # AlphaZero-style Dirichletノイズ追加（ルートノードのみ）
+        if add_dirichlet_noise:
+            noise = np.random.dirichlet([dirichlet_alpha] * len(moves))
+            probs = (1 - dirichlet_epsilon) * probs + dirichlet_epsilon * noise
+
         node.P = probs.astype(np.float32)
         node.N = np.zeros(len(moves), dtype=np.float32)
         node.W = np.zeros(len(moves), dtype=np.float32)

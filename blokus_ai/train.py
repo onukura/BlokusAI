@@ -156,18 +156,35 @@ def train_epoch(
     )
 
 
-def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], int]:
+def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
     """マルチプロセス用の自己対戦ゲーム実行ラッパー。
 
     各プロセスで独立してモデルをロードし、自己対戦を実行する。
 
     Args:
-        args: (net_state_dict, num_simulations, temperature, seed, batch_size)
+        args: (net_state_dict, num_simulations, seed, batch_size,
+               use_batched_mcts, add_dirichlet_noise, temperature_start,
+               temperature_end, temperature_threshold, dirichlet_alpha,
+               dirichlet_epsilon, use_score_diff_targets, normalize_range)
 
     Returns:
         (訓練サンプルのリスト, ゲーム結果)
     """
-    net_state_dict, num_simulations, temperature, seed, batch_size = args
+    (
+        net_state_dict,
+        num_simulations,
+        seed,
+        batch_size,
+        use_batched_mcts,
+        add_dirichlet_noise,
+        temperature_start,
+        temperature_end,
+        temperature_threshold,
+        dirichlet_alpha,
+        dirichlet_epsilon,
+        use_score_diff_targets,
+        normalize_range,
+    ) = args
 
     # 各プロセスでモデルを再構築
     net = PolicyValueNet()
@@ -179,9 +196,17 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], int]:
         samples, outcome = selfplay_game(
             net,
             num_simulations=num_simulations,
-            temperature=temperature,
+            temperature_start=temperature_start,
+            temperature_end=temperature_end,
+            temperature_threshold=temperature_threshold,
             seed=seed,
             batch_size=batch_size,
+            use_batched_mcts=use_batched_mcts,
+            add_dirichlet_noise=add_dirichlet_noise,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_epsilon=dirichlet_epsilon,
+            use_score_diff_targets=use_score_diff_targets,
+            normalize_range=normalize_range,
         )
 
     return samples, outcome
@@ -191,19 +216,35 @@ def run_parallel_selfplay_games(
     net: PolicyValueNet,
     num_games: int,
     num_simulations: int,
-    temperature: float,
     batch_size: int,
     num_workers: int | None = None,
-) -> List[Tuple[List[Sample], int]]:
+    use_batched_mcts: bool = False,
+    add_dirichlet_noise: bool = True,
+    temperature_start: float = 1.0,
+    temperature_end: float = 0.1,
+    temperature_threshold: int = 12,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_epsilon: float = 0.25,
+    use_score_diff_targets: bool = True,
+    normalize_range: float = 50.0,
+) -> List[Tuple[List[Sample], float]]:
     """複数の自己対戦ゲームを並列実行する。
 
     Args:
         net: ポリシーバリューネットワーク
         num_games: 実行するゲーム数
         num_simulations: 各手番でのMCTSシミュレーション回数
-        temperature: サンプリング温度
         batch_size: MCTSバッチサイズ
         num_workers: 並列ワーカー数（Noneの場合はCPUコア数を使用）
+        use_batched_mcts: バッチMCTSを使用するか
+        add_dirichlet_noise: Dirichletノイズを追加するか
+        temperature_start: 初期温度
+        temperature_end: 後期温度
+        temperature_threshold: 温度切り替えの手数
+        dirichlet_alpha: Dirichlet分布のalphaパラメータ
+        dirichlet_epsilon: ノイズ混合率
+        use_score_diff_targets: スコア差ベースの価値ターゲットを使用するか
+        normalize_range: スコア差の正規化範囲
 
     Returns:
         [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
@@ -220,9 +261,17 @@ def run_parallel_selfplay_games(
                 samples, outcome = selfplay_game(
                     net,
                     num_simulations=num_simulations,
-                    temperature=temperature,
+                    temperature_start=temperature_start,
+                    temperature_end=temperature_end,
+                    temperature_threshold=temperature_threshold,
                     seed=game_idx,
                     batch_size=batch_size,
+                    use_batched_mcts=use_batched_mcts,
+                    add_dirichlet_noise=add_dirichlet_noise,
+                    dirichlet_alpha=dirichlet_alpha,
+                    dirichlet_epsilon=dirichlet_epsilon,
+                    use_score_diff_targets=use_score_diff_targets,
+                    normalize_range=normalize_range,
                 )
             results.append((samples, outcome))
         return results
@@ -232,7 +281,21 @@ def run_parallel_selfplay_games(
 
     # 各ゲーム用の引数を準備
     args_list = [
-        (net_state_dict, num_simulations, temperature, game_idx, batch_size)
+        (
+            net_state_dict,
+            num_simulations,
+            game_idx,
+            batch_size,
+            use_batched_mcts,
+            add_dirichlet_noise,
+            temperature_start,
+            temperature_end,
+            temperature_threshold,
+            dirichlet_alpha,
+            dirichlet_epsilon,
+            use_score_diff_targets,
+            normalize_range,
+        )
         for game_idx in range(num_games)
     ]
 
@@ -286,12 +349,22 @@ def main(
     min_buffer_size: int = 1000,
     learning_rate: float = 1e-3,
     policy_loss_weight: float = 1.0,
-    value_loss_weight: float = 0.1,
+    value_loss_weight: float = 0.5,  # Increased from 0.1 to 0.5 for better value learning
     max_grad_norm: float = 1.0,
     use_lr_scheduler: bool = False,
     eval_games: int = 10,
     mcts_batch_size: int = 16,
     num_workers: int | None = None,
+    # AlphaZero-style improvements
+    use_batched_mcts: bool = False,  # Use standard MCTS by default
+    add_dirichlet_noise: bool = True,  # Enable Dirichlet noise for exploration
+    temperature_start: float = 1.0,  # Initial temperature (high exploration)
+    temperature_end: float = 0.1,  # Final temperature (low exploration, high exploitation)
+    temperature_threshold: int = 12,  # Move count to switch temperature
+    dirichlet_alpha: float = 0.3,  # Dirichlet alpha parameter
+    dirichlet_epsilon: float = 0.25,  # Dirichlet noise mixing ratio
+    use_score_diff_targets: bool = True,  # Use score difference for value targets
+    normalize_range: float = 50.0,  # Normalization range for score diff
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -347,12 +420,20 @@ def main(
             "max_grad_norm": max_grad_norm,
             "use_lr_scheduler": use_lr_scheduler,
             "batch_size": batch_size,
-            "temperature": 1.0,
+            "temperature_start": temperature_start,
+            "temperature_end": temperature_end,
+            "temperature_threshold": temperature_threshold,
             "game_type": "duo_2player",
             "use_replay_buffer": use_replay_buffer,
             "buffer_size": buffer_size,
             "num_training_steps": num_training_steps,
             "min_buffer_size": min_buffer_size,
+            "use_batched_mcts": use_batched_mcts,
+            "add_dirichlet_noise": add_dirichlet_noise,
+            "dirichlet_alpha": dirichlet_alpha,
+            "dirichlet_epsilon": dirichlet_epsilon,
+            "use_score_diff_targets": use_score_diff_targets,
+            "normalize_range": normalize_range,
         },
         use_wandb=use_wandb,
     )
@@ -403,9 +484,17 @@ def main(
             net=net,
             num_games=games_per_iteration,
             num_simulations=num_simulations,
-            temperature=1.0,
             batch_size=mcts_batch_size,
             num_workers=num_workers,
+            use_batched_mcts=use_batched_mcts,
+            add_dirichlet_noise=add_dirichlet_noise,
+            temperature_start=temperature_start,
+            temperature_end=temperature_end,
+            temperature_threshold=temperature_threshold,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_epsilon=dirichlet_epsilon,
+            use_score_diff_targets=use_score_diff_targets,
+            normalize_range=normalize_range,
         )
 
         for samples, outcome in results:

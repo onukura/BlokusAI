@@ -284,49 +284,67 @@ Priority items from the development log:
 
 ## Development Status
 
-### Completed (2026-01-12)
+### Completed (2026-01-21)
 
 - ✅ Core game engine with legal move generation
 - ✅ MCTS implementation with value perspective consistency
 - ✅ Neural network (policy/value heads)
 - ✅ Self-play training pipeline
-- ✅ **Evaluation system with past model comparison** (NEW)
+- ✅ **Evaluation system with past model comparison**
   - Random baseline
   - Greedy baseline
   - **N-generations-back checkpoint evaluation** 🎉
-- ✅ **Checkpoint management system** (NEW)
+- ✅ **Checkpoint management system**
   - Iteration-numbered checkpoints (`checkpoint_iter_NNNN.pth`)
   - Automatic saving at evaluation intervals
+- ✅ **AlphaZero-style training improvements** (NEW) 🎯
+  - Dirichlet noise for exploration diversity (α=0.3, ε=0.25)
+  - Temperature schedule (T=1.0→0.1 at move 12)
+  - Score-difference value targets (normalized with tanh)
+  - Improved value loss weight (0.1→0.5)
+  - Standard MCTS (non-batched) for better quality
+  - Official Blokus scoring with bonuses
+  - Symmetry augmentation foundations
 - ✅ Advanced visualization (MCTS Top-K, heatmaps, game analysis)
 - ✅ Comprehensive documentation
-- ✅ Bug fixes: State reconstruction, chosen move tracking
+- ✅ Bug fixes: MCTS simulations (30→500), value targets, state reconstruction
 
-### Current Performance
+### Current Performance (Pre-AlphaZero improvements)
 
-- AI vs Greedy: 100% win rate (after 2 training iterations)
+- AI vs Greedy: 100% win rate (after 2 training iterations with 500 MCTS sims)
 - AI vs Random: 40% win rate (early training)
 - **Current vs Past (2 gen back)**: 100% win rate (demonstrates learning progress) 🎯
 
-### Training Improvements (2026-01-12)
+**Note**: Performance with AlphaZero improvements to be measured in next training run.
 
-Training now includes:
+### Training Improvements (2026-01-21)
 
-- Automatic checkpoint saving at evaluation intervals
-- Progress tracking via past model comparison
-- Configurable generation gaps (default: 5, 10 generations back)
-- Example output:
+All AlphaZero standard techniques now implemented:
 
-  ```shell
-  Current vs Past(iter-2): W=10 L=0 D=0 (100.0%)
-  Checkpoint saved to models/checkpoints/checkpoint_iter_0004.pth
-  ```
+**Exploration & Diversity:**
+- Dirichlet noise on root node (prevents premature convergence)
+- Temperature schedule (exploration→exploitation transition)
+
+**Value Learning:**
+- Score-difference targets (richer training signal than win/loss)
+- Increased value loss weight (better value head training)
+
+**Search Quality:**
+- Standard MCTS (avoids batched overhead)
+- 500 simulations per move (proper search depth)
+
+**Future Optimizations:**
+- 8-way symmetry augmentation (8x data efficiency)
+- Official scoring with all bonuses
 
 ### Next Steps
 
-1. Long-term training (50-100 iterations) to observe full learning curve
-2. Replay buffer implementation for training stability
-3. Performance optimization (optional)
-4. 4-player extension (future)
-5. Mobile app with AR (future)
+1. **Complete training run** (50 iterations) with AlphaZero improvements
+2. Measure performance improvements vs baselines
+3. Long-term training (100+ iterations) if results are promising
+4. Replay buffer tuning for training stability
+5. Performance optimization (Rust MCTS, GPU batching)
+6. 4-player extension (future)
+7. Mobile app with AR (future)
 
 For detailed roadmap, see `docs/ROADMAP.md`.
