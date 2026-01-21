@@ -66,11 +66,14 @@ class ReplayBuffer:
 
         self._buffer.append((sample, float(outcome)))
 
-    def sample(self, batch_size: int) -> Tuple[List[Sample], List[float]]:
+    def sample(
+        self, batch_size: int, window_size: int | None = None
+    ) -> Tuple[List[Sample], List[float]]:
         """バッファからランダムにバッチをサンプリング。
 
         Args:
             batch_size: 取得するサンプル数
+            window_size: 最新N個のサンプルからのみサンプリング（Noneの場合全体から）
 
         Returns:
             (samples, outcomes)のタプル（outcomesは実数値のリスト）
@@ -81,6 +84,8 @@ class ReplayBuffer:
         Note:
             batch_size > len(buffer)の場合、min(batch_size, len(buffer))個を
             重複なしでサンプリングします。
+            window_sizeを指定すると、最新のwindow_size個のサンプルから優先的に
+            サンプリングし、古い分布による学習汚染を防ぎます（AlphaZero標準）。
         """
         if len(self._buffer) == 0:
             raise ValueError("Cannot sample from empty buffer")
@@ -88,9 +93,18 @@ class ReplayBuffer:
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
 
-        # 重複なしサンプリング、バッファサイズでキャップ
-        sample_size = min(batch_size, len(self._buffer))
-        sampled_pairs = random.sample(self._buffer, sample_size)
+        # サンプリング対象を決定
+        if window_size is not None and window_size > 0:
+            # 最新window_size個のサンプルからサンプリング
+            window_start = max(0, len(self._buffer) - window_size)
+            sampling_pool = list(self._buffer)[window_start:]
+        else:
+            # 全バッファからサンプリング（デフォルト）
+            sampling_pool = list(self._buffer)
+
+        # 重複なしサンプリング、プールサイズでキャップ
+        sample_size = min(batch_size, len(sampling_pool))
+        sampled_pairs = random.sample(sampling_pool, sample_size)
 
         samples = [pair[0] for pair in sampled_pairs]
         outcomes = [pair[1] for pair in sampled_pairs]

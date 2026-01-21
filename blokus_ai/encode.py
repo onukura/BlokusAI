@@ -124,22 +124,22 @@ def apply_symmetry_to_board(board: np.ndarray, symmetry_id: int) -> np.ndarray:
         symmetry_id: 対称性ID（0-7）
 
     Returns:
-        変換後のボード配列
+        変換後のボード配列（常に新しいメモリを確保）
     """
     # 水平反転
     if symmetry_id >= 4:
-        board = np.flip(board, axis=-1)  # 最後の軸（幅）を反転
+        board = np.flip(board, axis=-1).copy()  # copy()でビューを実体化
         symmetry_id -= 4
 
     # 回転
     if symmetry_id == 0:
         return board.copy()
     elif symmetry_id == 1:  # 90度回転
-        return np.rot90(board, k=1, axes=(-2, -1))
+        return np.rot90(board, k=1, axes=(-2, -1)).copy()
     elif symmetry_id == 2:  # 180度回転
-        return np.rot90(board, k=2, axes=(-2, -1))
+        return np.rot90(board, k=2, axes=(-2, -1)).copy()
     elif symmetry_id == 3:  # 270度回転
-        return np.rot90(board, k=3, axes=(-2, -1))
+        return np.rot90(board, k=3, axes=(-2, -1)).copy()
     else:
         raise ValueError(f"Invalid symmetry_id: {symmetry_id}")
 

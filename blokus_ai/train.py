@@ -9,10 +9,12 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from blokus_ai.device import get_device, get_device_name
-from blokus_ai.encode import batch_move_features
+from blokus_ai.encode import apply_symmetry_to_board, batch_move_features
+from blokus_ai.engine import Engine
 from blokus_ai.net import PolicyValueNet
 from blokus_ai.replay_buffer import ReplayBuffer
 from blokus_ai.selfplay import Sample, selfplay_game
+from blokus_ai.state import GameConfig
 
 
 class SelfPlayDataset(Dataset):
@@ -82,6 +84,7 @@ def train_epoch(
     max_grad_norm: float = 1.0,
     policy_loss_weight: float = 1.0,
     value_loss_weight: float = 0.1,
+    use_symmetry_augmentation: bool = True,
 ) -> tuple[float, float, float]:
     """自己対戦サンプルでニューラルネットを1エポック訓練する。
 
@@ -94,6 +97,7 @@ def train_epoch(
         optimizer: オプティマイザー（外部から渡される）
         batch_size: バッチサイズ
         max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
+        use_symmetry_augmentation: 8倍対称性拡張を使用（デフォルトTrue）
 
     Returns:
         (平均損失値, 平均ポリシー損失, 平均バリュー損失)
@@ -113,29 +117,39 @@ def train_epoch(
         policy_losses = []
         value_losses = []
         for sample, z in batch:
-            move_features = batch_move_features(
-                sample.moves, sample.x.shape[1], sample.x.shape[2]
-            )
-            # 入力テンソルをデバイスに移動
-            move_tensors = {
-                "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
-                "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
-                "size": torch.from_numpy(move_features["size"]).float().to(device),
-                "cells": move_features["cells"],
-            }
-            board = torch.from_numpy(sample.x[None]).float().to(device)
-            self_rem = torch.from_numpy(sample.self_rem[None]).float().to(device)
-            opp_rem = torch.from_numpy(sample.opp_rem[None]).float().to(device)
-            logits, value = net(board, self_rem, opp_rem, move_tensors)
+            # 対称性拡張の範囲を決定（8種類 or 1種類）
+            symmetries = range(8) if use_symmetry_augmentation else [0]
 
-            # ターゲットテンソルもデバイスに移動
-            target_policy = torch.from_numpy(sample.policy).float().to(device)
-            target_value = torch.tensor(float(z), device=device)
+            for symmetry_id in symmetries:
+                # ボードのみを対称変換（moves, policy, 残りピースはそのまま）
+                if symmetry_id == 0:
+                    x_transformed = sample.x
+                else:
+                    x_transformed = apply_symmetry_to_board(sample.x, symmetry_id)
 
-            policy_loss = -(target_policy * torch.log_softmax(logits, dim=0)).sum()
-            value_loss = (value - target_value).pow(2).mean()
-            policy_losses.append(policy_loss)
-            value_losses.append(value_loss)
+                move_features = batch_move_features(
+                    sample.moves, x_transformed.shape[1], x_transformed.shape[2]
+                )
+                # 入力テンソルをデバイスに移動
+                move_tensors = {
+                    "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
+                    "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
+                    "size": torch.from_numpy(move_features["size"]).float().to(device),
+                    "cells": move_features["cells"],
+                }
+                board = torch.from_numpy(x_transformed[None]).float().to(device)
+                self_rem = torch.from_numpy(sample.self_rem[None]).float().to(device)
+                opp_rem = torch.from_numpy(sample.opp_rem[None]).float().to(device)
+                logits, value = net(board, self_rem, opp_rem, move_tensors)
+
+                # ターゲットテンソルもデバイスに移動
+                target_policy = torch.from_numpy(sample.policy).float().to(device)
+                target_value = torch.tensor(float(z), device=device)
+
+                policy_loss = -(target_policy * torch.log_softmax(logits, dim=0)).sum()
+                value_loss = (value - target_value).pow(2).mean()
+                policy_losses.append(policy_loss)
+                value_losses.append(value_loss)
 
         loss = policy_loss_weight * torch.stack(policy_losses).mean() + value_loss_weight * torch.stack(value_losses).mean()
         loss.backward()
@@ -166,7 +180,8 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
         args: (net_state_dict, num_simulations, seed, batch_size,
                use_batched_mcts, add_dirichlet_noise, temperature_start,
                temperature_end, temperature_threshold, dirichlet_alpha,
-               dirichlet_epsilon, use_score_diff_targets, normalize_range)
+               dirichlet_epsilon, use_score_diff_targets, normalize_range,
+               use_tree_reuse)
 
     Returns:
         (訓練サンプルのリスト, ゲーム結果)
@@ -185,6 +200,7 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
         dirichlet_epsilon,
         use_score_diff_targets,
         normalize_range,
+        use_tree_reuse,
     ) = args
 
     # 各プロセスでモデルを再構築
@@ -208,6 +224,7 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
             dirichlet_epsilon=dirichlet_epsilon,
             use_score_diff_targets=use_score_diff_targets,
             normalize_range=normalize_range,
+            use_tree_reuse=use_tree_reuse,
         )
 
     return samples, outcome
@@ -228,6 +245,7 @@ def run_parallel_selfplay_games(
     dirichlet_epsilon: float = 0.25,
     use_score_diff_targets: bool = True,
     normalize_range: float = 50.0,
+    use_tree_reuse: bool = True,
 ) -> List[Tuple[List[Sample], float]]:
     """複数の自己対戦ゲームを並列実行する。
 
@@ -246,6 +264,7 @@ def run_parallel_selfplay_games(
         dirichlet_epsilon: ノイズ混合率
         use_score_diff_targets: スコア差ベースの価値ターゲットを使用するか
         normalize_range: スコア差の正規化範囲
+        use_tree_reuse: MCTSツリー再利用を有効化（AlphaZero標準）
 
     Returns:
         [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
@@ -273,6 +292,7 @@ def run_parallel_selfplay_games(
                     dirichlet_epsilon=dirichlet_epsilon,
                     use_score_diff_targets=use_score_diff_targets,
                     normalize_range=normalize_range,
+                    use_tree_reuse=use_tree_reuse,
                 )
             results.append((samples, outcome))
         return results
@@ -296,6 +316,7 @@ def run_parallel_selfplay_games(
             dirichlet_epsilon,
             use_score_diff_targets,
             normalize_range,
+            use_tree_reuse,
         )
         for game_idx in range(num_games)
     ]
@@ -332,6 +353,89 @@ def save_checkpoint(
     return checkpoint_path
 
 
+def evaluate_vs_best_model(
+    current_net: PolicyValueNet,
+    best_model_path: str,
+    num_games: int = 20,
+    num_simulations: int = 500,
+    win_rate_threshold: float = 0.55,
+) -> tuple[bool, float]:
+    """現在のモデルをベストモデルと対戦させ、採用するか判定する。
+
+    Args:
+        current_net: 現在のモデル
+        best_model_path: ベストモデルのパス
+        num_games: 対戦ゲーム数
+        num_simulations: MCTSシミュレーション回数
+        win_rate_threshold: 採用に必要な勝率（デフォルト55%）
+
+    Returns:
+        (採用するか, 勝率)のタプル
+    """
+    import os
+
+    from blokus_ai.eval import mcts_policy, play_match
+
+    # ベストモデルが存在しない場合は無条件採用
+    if not os.path.exists(best_model_path):
+        return True, 1.0
+
+    # ベストモデルをロード
+    best_net = PolicyValueNet()
+    best_net.load_state_dict(torch.load(best_model_path))
+    best_net.eval()
+    current_net.eval()
+
+    # 対戦実行
+    wins = 0
+    losses = 0
+    draws = 0
+
+    with torch.no_grad():
+        for game_idx in range(num_games):
+            # プレイヤー0とプレイヤー1を交互に割り当て（公平性のため）
+            if game_idx % 2 == 0:
+                # 現在のモデルがプレイヤー0
+                engine = Engine(GameConfig())
+                policy0 = lambda e, s: mcts_policy(
+                    current_net, e, s, num_simulations=num_simulations
+                )
+                policy1 = lambda e, s: mcts_policy(
+                    best_net, e, s, num_simulations=num_simulations
+                )
+                result = play_match(policy0, policy1, seed=game_idx)
+                if result == 1:
+                    wins += 1
+                elif result == -1:
+                    losses += 1
+                else:
+                    draws += 1
+            else:
+                # 現在のモデルがプレイヤー1
+                engine = Engine(GameConfig())
+                policy0 = lambda e, s: mcts_policy(
+                    best_net, e, s, num_simulations=num_simulations
+                )
+                policy1 = lambda e, s: mcts_policy(
+                    current_net, e, s, num_simulations=num_simulations
+                )
+                result = play_match(policy0, policy1, seed=game_idx)
+                if result == -1:
+                    wins += 1
+                elif result == 1:
+                    losses += 1
+                else:
+                    draws += 1
+
+    total_games = wins + losses + draws
+    win_rate = wins / total_games if total_games > 0 else 0.0
+
+    # 勝率がしきい値以上なら採用
+    accept = win_rate >= win_rate_threshold
+
+    return accept, win_rate
+
+
 def main(
     num_iterations: int = 10,
     games_per_iteration: int = 5,
@@ -348,6 +452,7 @@ def main(
     batch_size: int = 32,
     num_training_steps: int = 100,
     min_buffer_size: int = 1000,
+    replay_window_size: int | None = None,  # Sample from latest N samples (None = all)
     learning_rate: float = 1e-3,
     policy_loss_weight: float = 1.0,
     value_loss_weight: float = 0.5,  # Increased from 0.1 to 0.5 for better value learning
@@ -366,6 +471,12 @@ def main(
     dirichlet_epsilon: float = 0.25,  # Dirichlet noise mixing ratio
     use_score_diff_targets: bool = True,  # Use score difference for value targets
     normalize_range: float = 50.0,  # Normalization range for score diff
+    use_symmetry_augmentation: bool = True,  # Use 8-fold symmetry augmentation
+    use_tree_reuse: bool = True,  # Enable MCTS tree reuse (AlphaZero standard)
+    use_best_model_gating: bool = True,  # Enable best model gating (Arena)
+    arena_games: int = 20,  # Number of games for arena evaluation
+    arena_win_rate_threshold: float = 0.55,  # Win rate threshold for model acceptance
+    best_model_path: str = "models/best_model.pth",  # Path to best model
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -387,6 +498,7 @@ def main(
         batch_size: 訓練バッチサイズ
         num_training_steps: イテレーションごとの訓練ステップ数
         min_buffer_size: 訓練開始に必要な最小サンプル数
+        replay_window_size: 最新N個のサンプルからのみサンプリング（Noneで全体）
         learning_rate: 学習率
         policy_loss_weight: ポリシー損失の重み（デフォルト1.0）
         value_loss_weight: バリュー損失の重み（デフォルト0.1）
@@ -429,12 +541,18 @@ def main(
             "buffer_size": buffer_size,
             "num_training_steps": num_training_steps,
             "min_buffer_size": min_buffer_size,
+            "replay_window_size": replay_window_size,
             "use_batched_mcts": use_batched_mcts,
             "add_dirichlet_noise": add_dirichlet_noise,
             "dirichlet_alpha": dirichlet_alpha,
             "dirichlet_epsilon": dirichlet_epsilon,
             "use_score_diff_targets": use_score_diff_targets,
             "normalize_range": normalize_range,
+            "use_symmetry_augmentation": use_symmetry_augmentation,
+            "use_tree_reuse": use_tree_reuse,
+            "use_best_model_gating": use_best_model_gating,
+            "arena_games": arena_games,
+            "arena_win_rate_threshold": arena_win_rate_threshold,
         },
         use_wandb=use_wandb,
     )
@@ -496,6 +614,7 @@ def main(
             dirichlet_epsilon=dirichlet_epsilon,
             use_score_diff_targets=use_score_diff_targets,
             normalize_range=normalize_range,
+            use_tree_reuse=use_tree_reuse,
         )
 
         for samples, outcome in results:
@@ -527,12 +646,15 @@ def main(
             else:
                 # Train for num_training_steps
                 for step in range(num_training_steps):
-                    samples, outcomes = replay_buffer.sample(batch_size)
+                    samples, outcomes = replay_buffer.sample(
+                        batch_size, window_size=replay_window_size
+                    )
                     avg_loss, avg_policy_loss, avg_value_loss = train_epoch(
                         net, samples, outcomes, optimizer,
                         batch_size=batch_size, max_grad_norm=max_grad_norm,
                         policy_loss_weight=policy_loss_weight,
-                        value_loss_weight=value_loss_weight
+                        value_loss_weight=value_loss_weight,
+                        use_symmetry_augmentation=use_symmetry_augmentation
                     )
                     losses.append(avg_loss)
                     policy_losses.append(avg_policy_loss)
@@ -546,7 +668,8 @@ def main(
                     net, mini_samples, mini_outcomes, optimizer,
                     batch_size=1, max_grad_norm=max_grad_norm,
                     policy_loss_weight=policy_loss_weight,
-                    value_loss_weight=value_loss_weight
+                    value_loss_weight=value_loss_weight,
+                    use_symmetry_augmentation=use_symmetry_augmentation
                 )
                 losses.append(avg_loss)
                 policy_losses.append(avg_policy_loss)
@@ -651,6 +774,46 @@ def main(
 
             wandb_logger.log(wandb_metrics, step=iteration + 1)
 
+            # Arena evaluation (Best model gating)
+            if use_best_model_gating:
+                print(f"\n--- Arena: Current vs Best Model ---")
+                accept, arena_win_rate = evaluate_vs_best_model(
+                    current_net=net,
+                    best_model_path=best_model_path,
+                    num_games=arena_games,
+                    num_simulations=num_simulations,
+                    win_rate_threshold=arena_win_rate_threshold,
+                )
+                print(
+                    f"Arena result: Win rate={arena_win_rate:.1%} "
+                    f"(threshold={arena_win_rate_threshold:.1%})"
+                )
+
+                if accept:
+                    print(f"✓ New model accepted! Updating best model.")
+                    # ベストモデルを更新
+                    import os
+
+                    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+                    torch.save(net.state_dict(), best_model_path)
+                else:
+                    print(f"✗ New model rejected. Keeping previous best model.")
+
+                # Arena結果をWandBにログ
+                wandb_logger.log(
+                    {
+                        "arena/win_rate": arena_win_rate,
+                        "arena/accepted": 1 if accept else 0,
+                    },
+                    step=iteration + 1,
+                )
+            else:
+                # ゲーティング無効時は常にベストモデルを更新
+                import os
+
+                os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+                torch.save(net.state_dict(), best_model_path)
+
             # Save checkpoint
             if save_checkpoints:
                 checkpoint_path = save_checkpoint(net, iteration + 1, checkpoint_dir)
@@ -670,7 +833,7 @@ def main(
                     },
                 )
 
-            # Save model
+            # Save model (current iteration model, not best)
             torch.save(net.state_dict(), save_path)
             print(f"Model saved to {save_path}")
 

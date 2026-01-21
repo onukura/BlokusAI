@@ -63,17 +63,82 @@ class MCTS:
         c_puct: PUCTの探索定数（UCBのバランス調整）
     """
 
-    def __init__(self, engine: Engine, net: PolicyValueNet, c_puct: float = 1.5):
+    def __init__(
+        self,
+        engine: Engine,
+        net: PolicyValueNet,
+        c_puct_base: float = 19652,
+        c_puct_init: float = 1.25,
+        use_q_normalization: bool = True,
+    ):
         """MCTSを初期化する。
 
         Args:
             engine: ゲームエンジン
             net: ポリシーバリューネットワーク
-            c_puct: PUCT探索定数（デフォルト1.5）
+            c_puct_base: PUCT動的係数のベース値（デフォルト19652、AlphaZero標準）
+            c_puct_init: PUCT動的係数の初期値（デフォルト1.25、AlphaZero標準）
+            use_q_normalization: Q値正規化を使用（デフォルトTrue、KataGoスタイル）
         """
         self.engine = engine
         self.net = net
-        self.c_puct = c_puct
+        self.c_puct_base = c_puct_base
+        self.c_puct_init = c_puct_init
+        self.use_q_normalization = use_q_normalization
+
+    def _compute_c_puct(self, total_visit_count: float) -> float:
+        """訪問回数に基づいて動的PUCT係数を計算する。
+
+        AlphaZero標準の式: c = log((N + c_base + 1) / c_base) + c_init
+
+        Args:
+            total_visit_count: 現在のノードの総訪問回数
+
+        Returns:
+            動的PUCT係数
+        """
+        import math
+
+        return math.log(
+            (total_visit_count + self.c_puct_base + 1) / self.c_puct_base
+        ) + self.c_puct_init
+
+    def _normalize_q_values(self, W: np.ndarray, N: np.ndarray) -> np.ndarray:
+        """Q値を正規化する（KataGoスタイル）。
+
+        Q値の範囲を動的に正規化し、探索の安定性を向上させる。
+
+        Args:
+            W: 累積価値配列
+            N: 訪問回数配列
+
+        Returns:
+            正規化されたQ値配列
+        """
+        if not self.use_q_normalization:
+            # 正規化無効の場合は通常のQ値を返す
+            return W / (N + 1e-8)
+
+        # 通常のQ値を計算
+        Q = W / (N + 1e-8)
+
+        # 訪問回数が0のアクションは除外して範囲を計算
+        visited_mask = N > 0
+        if not visited_mask.any():
+            return Q
+
+        visited_Q = Q[visited_mask]
+        q_min = visited_Q.min()
+        q_max = visited_Q.max()
+
+        # 範囲が小さすぎる場合は正規化をスキップ
+        if q_max - q_min < 1e-6:
+            return Q
+
+        # [0, 1]範囲に正規化
+        Q_normalized = (Q - q_min) / (q_max - q_min + 1e-8)
+
+        return Q_normalized
 
     def run(
         self,
@@ -200,18 +265,25 @@ class MCTS:
                 return (path, node)
 
             # PUCT選択（Rust版使用可能な場合）
+            total_N = np.sum(node.N)
+            c_puct = self._compute_c_puct(total_N)
+
+            # Q値正規化
+            Q_values = self._normalize_q_values(node.W, node.N)
+
             if USE_RUST_MCTS:
+                # Rust版の場合は正規化されたQ値を使ってW'を計算
+                W_normalized = Q_values * (node.N + 1e-8)
                 best_index = blokus_rust.select_best_action(
-                    node.W, node.N, node.P, self.c_puct
+                    W_normalized, node.N, node.P, c_puct
                 )
             else:
-                total_N = np.sum(node.N)
                 best_index = None
                 best_score = -float("inf")
                 for i in range(len(node.moves)):
-                    q = node.W[i] / (node.N[i] + 1e-8)
+                    q = Q_values[i]
                     u = (
-                        self.c_puct
+                        c_puct
                         * node.P[i]
                         * np.sqrt(total_N + 1e-8)
                         / (1 + node.N[i])
@@ -367,17 +439,24 @@ class MCTS:
             return float(outcome if player == 0 else -outcome)
 
         # PUCT選択（Rust版使用可能な場合）
+        total_N = np.sum(node.N)
+        c_puct = self._compute_c_puct(total_N)
+
+        # Q値正規化
+        Q_values = self._normalize_q_values(node.W, node.N)
+
         if USE_RUST_MCTS:
+            # Rust版の場合は正規化されたQ値を使ってW'を計算
+            W_normalized = Q_values * (node.N + 1e-8)
             best_index = blokus_rust.select_best_action(
-                node.W, node.N, node.P, self.c_puct
+                W_normalized, node.N, node.P, c_puct
             )
         else:
-            total_N = np.sum(node.N)
             best_index = None
             best_score = -float("inf")
             for i in range(len(node.moves)):
-                q = node.W[i] / (node.N[i] + 1e-8)
-                u = self.c_puct * node.P[i] * np.sqrt(total_N + 1e-8) / (1 + node.N[i])
+                q = Q_values[i]
+                u = c_puct * node.P[i] * np.sqrt(total_N + 1e-8) / (1 + node.N[i])
                 score = q + u
                 if score > best_score:
                     best_score = score

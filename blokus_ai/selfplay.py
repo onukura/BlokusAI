@@ -49,6 +49,7 @@ def selfplay_game(
     dirichlet_epsilon: float = 0.25,
     use_score_diff_targets: bool = True,
     normalize_range: float = 50.0,
+    use_tree_reuse: bool = True,
 ) -> tuple[List[Sample], float]:
     """ニューラルネットとMCTSを使って自己対戦ゲームを1試合プレイする。
 
@@ -69,6 +70,7 @@ def selfplay_game(
         dirichlet_epsilon: ノイズ混合率（デフォルト0.25）
         use_score_diff_targets: スコア差ベースの価値ターゲットを使用するか（デフォルトTrue）
         normalize_range: スコア差の正規化範囲（デフォルト50.0）
+        use_tree_reuse: MCTSツリー再利用を有効化（デフォルトTrue、AlphaZero標準）
 
         Returns:
         (訓練サンプルのリスト, ゲーム結果（プレイヤー0視点、正規化済み実数値）)
@@ -81,9 +83,24 @@ def selfplay_game(
     mcts = MCTS(engine, net)
     samples: List[Sample] = []
     move_count = 0
+    root = None  # 前手からのツリーを保持
 
     while not engine.is_terminal(state):
-        root = Node(state=state)
+        # ツリー再利用: 前手の選択された子ノードを新しいrootにする
+        if use_tree_reuse and root is not None and move_count > 0:
+            # 前回選択された手のインデックスから子ノードを取得
+            prev_choice = samples[-1].chosen_move_idx
+            if prev_choice in root.children:
+                # 子ノードが存在する場合は再利用
+                root = root.children[prev_choice]
+                # 状態を更新（念のため）
+                root.state = state
+            else:
+                # 子ノードがない場合は新規作成
+                root = Node(state=state)
+        else:
+            # 初手または再利用無効時は新規作成
+            root = Node(state=state)
 
         # AlphaZero-style温度スケジュール
         temperature = (
