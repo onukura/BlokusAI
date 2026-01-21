@@ -6,7 +6,7 @@ from typing import List
 
 import numpy as np
 
-from blokus_ai.encode import encode_state_duo
+from blokus_ai.encode import encode_state_duo_v2
 from blokus_ai.engine import Engine, Move
 from blokus_ai.mcts import MCTS, Node
 from blokus_ai.net import PolicyValueNet
@@ -18,9 +18,10 @@ class Sample:
     """自己対戦で生成される1ステップの訓練サンプル。
 
     Attributes:
-        x: ボード状態エンコーディング (5, H, W)
+        x: ボード状態エンコーディング (8, H, W)
         self_rem: 現在プレイヤーの残りピース (21,)
         opp_rem: 相手プレイヤーの残りピース (21,)
+        game_phase: ゲーム進行度 (0.0-1.0のスカラー値)
         moves: この局面での合法手リスト
         policy: MCTSが生成した改善ポリシー（訪問回数分布）
         player: この局面のプレイヤーID
@@ -29,6 +30,7 @@ class Sample:
     x: np.ndarray
     self_rem: np.ndarray
     opp_rem: np.ndarray
+    game_phase: float
     moves: List[Move]
     policy: np.ndarray
     player: int
@@ -153,12 +155,13 @@ def selfplay_game(
             policy = scaled / scaled.sum()
             choice = int(np.random.choice(len(visits), p=policy))
 
-        x, self_rem, opp_rem = encode_state_duo(engine, state)
+        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(engine, state)
         samples.append(
             Sample(
                 x=x,
                 self_rem=self_rem,
                 opp_rem=opp_rem,
+                game_phase=game_phase,
                 moves=root.moves,
                 policy=policy,
                 player=state.turn,

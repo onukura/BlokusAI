@@ -86,7 +86,7 @@ class PolicyValueNet(nn.Module):
     """
     def __init__(
         self,
-        in_channels: int = 5,
+        in_channels: int = 8,
         channels: int = 128,
         num_blocks: int = 10,
         n_pieces: int = 21,
@@ -94,7 +94,7 @@ class PolicyValueNet(nn.Module):
         """ネットワークを初期化する。
 
         Args:
-            in_channels: 入力チャネル数
+            in_channels: 入力チャネル数（デフォルト8: v2特徴量）
             channels: エンコーダの内部チャネル数
             num_blocks: 残差ブロック数
             n_pieces: ピース総数（デフォルト21）
@@ -113,7 +113,7 @@ class PolicyValueNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(64 + n_pieces * 2, 256),
+            nn.Linear(64 + n_pieces * 2 + 1, 256),  # +1 for game_phase
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),
             nn.Linear(256, 128),
@@ -136,6 +136,7 @@ class PolicyValueNet(nn.Module):
         self_rem: torch.Tensor,
         opp_rem: torch.Tensor,
         move_features: Dict[str, torch.Tensor],
+        game_phase: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """順伝播。
 
@@ -144,13 +145,14 @@ class PolicyValueNet(nn.Module):
             self_rem: 現在プレイヤーの残りピース (B, 21)
             opp_rem: 相手プレイヤーの残りピース (B, 21)
             move_features: 合法手の特徴量辞書
+            game_phase: ゲーム進行度 (B,) - オプション（v2特徴量用）
 
         Returns:
             (ポリシーロジット (N_moves,), バリュー (B,))
         """
         fmap = self.encoder(board)
         logits = self._policy_logits(fmap, move_features)
-        value = self._value(fmap, self_rem, opp_rem)
+        value = self._value(fmap, self_rem, opp_rem, game_phase)
         return logits, value
 
     def _policy_logits(
@@ -187,23 +189,43 @@ class PolicyValueNet(nn.Module):
         return logits
 
     def _value(
-        self, fmap: torch.Tensor, self_rem: torch.Tensor, opp_rem: torch.Tensor
+        self,
+        fmap: torch.Tensor,
+        self_rem: torch.Tensor,
+        opp_rem: torch.Tensor,
+        game_phase: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """局面のバリュー評価値を計算する。
 
         特徴マップをグローバル平均プーリングし、残りピース情報と
-        結合してMLPで評価値を出力。
+        ゲーム進行度を結合してMLPで評価値を出力。
 
         Args:
             fmap: エンコードされた特徴マップ (B, C, H, W)
             self_rem: 現在プレイヤーの残りピース (B, 21)
             opp_rem: 相手プレイヤーの残りピース (B, 21)
+            game_phase: ゲーム進行度 (B,) - オプション
 
         Returns:
             評価値 (B,) [-1, +1]の範囲
         """
         rem = torch.cat([self_rem, opp_rem], dim=1)
-        value_input = torch.cat([self.value_head[:4](fmap).flatten(1), rem], dim=1)
+        pooled = self.value_head[:4](fmap).flatten(1)
+
+        # game_phaseがある場合は追加
+        if game_phase is not None:
+            # game_phaseを(B, 1)の形に変換
+            if game_phase.dim() == 0:
+                game_phase = game_phase.unsqueeze(0)
+            if game_phase.dim() == 1:
+                game_phase = game_phase.unsqueeze(-1)
+            value_input = torch.cat([pooled, rem, game_phase], dim=1)
+        else:
+            # 後方互換性: game_phaseなしの場合は0でパディング
+            batch_size = fmap.shape[0]
+            zero_phase = torch.zeros(batch_size, 1, device=fmap.device)
+            value_input = torch.cat([pooled, rem, zero_phase], dim=1)
+
         value = self.value_head[4:](value_input)
         return value.squeeze(-1)
 
@@ -242,6 +264,7 @@ def predict(
     self_rem: np.ndarray,
     opp_rem: np.ndarray,
     move_features,
+    game_phase: float | None = None,
 ):
     """ニューラルネットで局面を評価し、ポリシーとバリューを返す。
 
@@ -254,6 +277,7 @@ def predict(
         self_rem: 現在プレイヤーの残りピース (21,)
         opp_rem: 相手プレイヤーの残りピース (21,)
         move_features: 合法手の特徴量辞書
+        game_phase: ゲーム進行度 (scalar) - オプション
 
     Returns:
         (ポリシーロジット (N_moves,), バリュー (float))
@@ -271,7 +295,13 @@ def predict(
         "size": torch.from_numpy(move_features["size"]).float().to(device),
         "cells": move_features["cells"],  # cellsはリストのままなのでデバイス移動不要
     }
-    logits, value = net(board_t, self_rem_t, opp_rem_t, move_tensors)
+
+    # game_phaseをテンソルに変換（ある場合）
+    game_phase_t = None
+    if game_phase is not None:
+        game_phase_t = torch.tensor([game_phase], dtype=torch.float32, device=device)
+
+    logits, value = net(board_t, self_rem_t, opp_rem_t, move_tensors, game_phase_t)
 
     # CPUに戻してnumpyに変換（後方互換性のため）
     return logits.cpu().numpy(), float(value.cpu().item())
@@ -284,6 +314,7 @@ def batch_predict(
     self_rems: List[np.ndarray],
     opp_rems: List[np.ndarray],
     move_features_list: List[Dict],
+    game_phases: List[float] | None = None,
 ) -> List[tuple[np.ndarray, float]]:
     """複数の局面をバッチで評価する（MCTS高速化用）。
 
@@ -296,6 +327,7 @@ def batch_predict(
         self_rems: 残りピース (自分) のリスト [(21,), ...]
         opp_rems: 残りピース (相手) のリスト [(21,), ...]
         move_features_list: 合法手特徴量のリスト [dict, ...]
+        game_phases: ゲーム進行度のリスト [float, ...] - オプション
 
     Returns:
         [(ポリシーロジット, バリュー), ...] の各局面の結果リスト
@@ -310,6 +342,11 @@ def batch_predict(
     boards_t = torch.stack([torch.from_numpy(b) for b in boards]).float().to(device)
     self_rems_t = torch.stack([torch.from_numpy(s) for s in self_rems]).float().to(device)
     opp_rems_t = torch.stack([torch.from_numpy(o) for o in opp_rems]).float().to(device)
+
+    # game_phasesをテンソルに変換（ある場合）
+    game_phases_t = None
+    if game_phases is not None:
+        game_phases_t = torch.tensor(game_phases, dtype=torch.float32, device=device)
 
     # バッチエンコード（高速！）
     fmaps = net.encoder(boards_t)
@@ -326,8 +363,9 @@ def batch_predict(
 
         # 個別のポリシー計算
         logits = net._policy_logits(fmaps[i:i+1], move_tensors)
-        # 個別のバリュー計算
-        value = net._value(fmaps[i:i+1], self_rems_t[i:i+1], opp_rems_t[i:i+1])
+        # 個別のバリュー計算（game_phaseがあれば渡す）
+        phase_t = game_phases_t[i:i+1] if game_phases_t is not None else None
+        value = net._value(fmaps[i:i+1], self_rems_t[i:i+1], opp_rems_t[i:i+1], phase_t)
 
         results.append((logits.cpu().numpy(), float(value.cpu().item())))
 
