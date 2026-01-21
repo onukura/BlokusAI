@@ -48,28 +48,32 @@ class ReplayBuffer:
         self.max_size = max_size
         self._buffer: deque = deque(maxlen=max_size)
 
-    def add(self, sample: Sample, outcome: int) -> None:
+    def add(self, sample: Sample, outcome: float) -> None:
         """サンプルとアウトカムのペアをバッファに追加。
 
         バッファが満杯の場合、最古のサンプルを自動削除（FIFO）。
 
         Args:
             sample: 自己対戦から得られた訓練サンプル
-            outcome: ゲーム結果（プレイヤー0視点で+1/0/-1）
+            outcome: ゲーム結果（プレイヤー0視点、-1.0～+1.0の実数値）
+                    離散値（+1/0/-1）または連続値（スコア差正規化）
         """
-        if outcome not in {-1, 0, 1}:
-            raise ValueError(f"outcome must be -1, 0, or 1, got {outcome}")
+        # 連続値のoutcomeを許可（スコア差ベースの価値ターゲット対応）
+        if not isinstance(outcome, (int, float)):
+            raise ValueError(f"outcome must be numeric, got {type(outcome)}")
+        if not -1.0 <= outcome <= 1.0:
+            raise ValueError(f"outcome must be in [-1.0, 1.0], got {outcome}")
 
-        self._buffer.append((sample, outcome))
+        self._buffer.append((sample, float(outcome)))
 
-    def sample(self, batch_size: int) -> Tuple[List[Sample], List[int]]:
+    def sample(self, batch_size: int) -> Tuple[List[Sample], List[float]]:
         """バッファからランダムにバッチをサンプリング。
 
         Args:
             batch_size: 取得するサンプル数
 
         Returns:
-            (samples, outcomes)のタプル（両方リスト）
+            (samples, outcomes)のタプル（outcomesは実数値のリスト）
 
         Raises:
             ValueError: バッファが空、またはbatch_size <= 0の場合

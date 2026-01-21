@@ -23,14 +23,15 @@ class SelfPlayDataset(Dataset):
     Note:
         outcomeはサンプルごとに異なる値を持つリストとして渡される。
         これによりリプレイバッファからの混合サンプルに対応。
+        連続値（スコア差ベース）または離散値（勝敗のみ）を受け入れる。
     """
 
-    def __init__(self, samples: List[Sample], outcomes: List[int]):
+    def __init__(self, samples: List[Sample], outcomes: List[float]):
         """データセットを初期化する。
 
         Args:
             samples: 訓練サンプルのリスト
-            outcomes: ゲーム結果のリスト（各サンプルに対応、プレイヤー0視点で+1/0/-1）
+            outcomes: ゲーム結果のリスト（各サンプルに対応、プレイヤー0視点、-1.0～+1.0）
         """
         if len(samples) != len(outcomes):
             raise ValueError(
@@ -75,7 +76,7 @@ def collate_fn(batch):
 def train_epoch(
     net: PolicyValueNet,
     samples: List[Sample],
-    outcomes: List[int],
+    outcomes: List[float],
     optimizer: torch.optim.Optimizer,
     batch_size: int = 8,
     max_grad_norm: float = 1.0,
@@ -89,7 +90,7 @@ def train_epoch(
     Args:
         net: ポリシーバリューネットワーク
         samples: 訓練サンプルのリスト
-        outcomes: ゲーム結果のリスト（各サンプルに対応、プレイヤー0視点）
+        outcomes: ゲーム結果のリスト（各サンプルに対応、プレイヤー0視点、-1.0～+1.0）
         optimizer: オプティマイザー（外部から渡される）
         batch_size: バッチサイズ
         max_grad_norm: 勾配クリッピングの最大ノルム（0で無効化）
