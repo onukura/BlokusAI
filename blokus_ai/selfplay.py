@@ -112,8 +112,16 @@ def selfplay_game(
             temperature_start if move_count < temperature_threshold else temperature_end
         )
 
+        # デバイスに応じてMCTSメソッドを選択（Phase 2最適化）
+        # GPU/TPUではバッチMCTSが高速、CPUでは標準MCTSが高速
+        device = next(net.parameters()).device
+        auto_use_batched = use_batched_mcts
+        if use_batched_mcts and device.type == 'cpu':
+            # CPUでのバッチMCTSは遅いので無効化
+            auto_use_batched = False
+
         # MCTSメソッド選択とDirichletノイズ適用
-        if use_batched_mcts:
+        if auto_use_batched:
             visits = mcts.run_batched(
                 root,
                 num_simulations=num_simulations,

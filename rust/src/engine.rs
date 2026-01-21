@@ -1,6 +1,7 @@
 use numpy::ndarray;
 use numpy::PyReadonlyArray2;
 use pyo3::prelude::*;
+use rayon::prelude::*;  // Parallel iterators for legal move generation
 
 #[pyclass]
 #[derive(Clone)]
@@ -99,7 +100,6 @@ pub fn legal_moves(
 ) -> Vec<Move> {
     let board = board.as_array();
     let remaining = remaining.as_array();
-    let mut moves = Vec::new();
 
     // 候補位置を決定（初手なら開始コーナー、それ以外はコーナー候補）
     let candidates = if first_move_done {
@@ -110,48 +110,101 @@ pub fn legal_moves(
         vec![]
     };
 
-    // 各ピースとバリアントについて合法手を生成
-    for (piece_id, piece_variants) in pieces.iter().enumerate() {
-        // このピースが残っているかチェック
-        if !remaining[[player as usize, piece_id]] {
-            continue;
-        }
+    // 推定作業量を計算（並列化の閾値判定用）
+    let remaining_pieces: usize = (0..pieces.len())
+        .filter(|&i| remaining[[player as usize, i]])
+        .count();
+    let estimated_work = candidates.len() * remaining_pieces;
 
-        for (variant_id, variant_cells) in piece_variants.iter().enumerate() {
-            // 各コーナー候補について試行
-            for &anchor in &candidates {
-                // バリアントの各セルをアンカーに合わせて配置を試行
-                for &cell in variant_cells {
-                    let offset = (anchor.0 - cell.0, anchor.1 - cell.1);
+    // 閾値: 作業量が100を超える場合は並列化
+    const PARALLEL_THRESHOLD: usize = 100;
 
-                    // 配置されるセルを計算
-                    let placed: Vec<(i32, i32)> = variant_cells
-                        .iter()
-                        .map(|&(x, y)| (offset.0 + x, offset.1 + y))
-                        .collect();
+    if estimated_work > PARALLEL_THRESHOLD {
+        // 並列版: Rayonで並列化
+        pieces
+            .par_iter()
+            .enumerate()
+            .filter(|(piece_id, _)| remaining[[player as usize, *piece_id]])
+            .flat_map(|(piece_id, piece_variants)| {
+                piece_variants
+                    .par_iter()
+                    .enumerate()
+                    .flat_map(|(variant_id, variant_cells)| {
+                        candidates
+                            .par_iter()
+                            .flat_map(|&anchor| {
+                                variant_cells
+                                    .iter()
+                                    .filter_map(|&cell| {
+                                        let offset = (anchor.0 - cell.0, anchor.1 - cell.1);
+                                        let placed: Vec<(i32, i32)> = variant_cells
+                                            .iter()
+                                            .map(|&(x, y)| (offset.0 + x, offset.1 + y))
+                                            .collect();
 
-                    // 合法性チェック
-                    if is_legal_placement_internal(
-                        &board,
-                        player,
-                        &placed,
-                        first_move_done,
-                        start_corner,
-                    ) {
-                        moves.push(Move {
+                                        if is_legal_placement_internal(
+                                            &board,
+                                            player,
+                                            &placed,
+                                            first_move_done,
+                                            start_corner,
+                                        ) {
+                                            Some(Move {
+                                                player,
+                                                piece_id: piece_id as i32,
+                                                variant_id: variant_id as i32,
+                                                anchor,
+                                                cells: placed,
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<Move>>()
+                            })
+                            .collect::<Vec<Move>>()
+                    })
+                    .collect::<Vec<Move>>()
+            })
+            .collect()
+    } else {
+        // 逐次版: 小さな問題では並列化オーバーヘッドを避ける
+        let mut moves = Vec::new();
+        for (piece_id, piece_variants) in pieces.iter().enumerate() {
+            if !remaining[[player as usize, piece_id]] {
+                continue;
+            }
+
+            for (variant_id, variant_cells) in piece_variants.iter().enumerate() {
+                for &anchor in &candidates {
+                    for &cell in variant_cells {
+                        let offset = (anchor.0 - cell.0, anchor.1 - cell.1);
+                        let placed: Vec<(i32, i32)> = variant_cells
+                            .iter()
+                            .map(|&(x, y)| (offset.0 + x, offset.1 + y))
+                            .collect();
+
+                        if is_legal_placement_internal(
+                            &board,
                             player,
-                            piece_id: piece_id as i32,
-                            variant_id: variant_id as i32,
-                            anchor,
-                            cells: placed,
-                        });
+                            &placed,
+                            first_move_done,
+                            start_corner,
+                        ) {
+                            moves.push(Move {
+                                player,
+                                piece_id: piece_id as i32,
+                                variant_id: variant_id as i32,
+                                anchor,
+                                cells: placed,
+                            });
+                        }
                     }
                 }
             }
         }
+        moves
     }
-
-    moves
 }
 
 // is_legal_placementの内部バージョン（配列を直接受け取る）

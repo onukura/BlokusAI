@@ -278,8 +278,8 @@ def run_parallel_selfplay_games(
         [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
     """
     if num_workers is None:
-        # デフォルトはCPUコア数（最大8）
-        num_workers = min(cpu_count(), 8)
+        # デフォルトはCPUコア数（最大4、メモリ使用量を考慮）
+        num_workers = min(cpu_count(), 4)
 
     # 並列化が無効または1ゲームのみの場合は逐次実行
     if num_workers <= 1 or num_games == 1:
@@ -610,8 +610,11 @@ def main(
         all_outcomes = []
         game_lengths = []
 
+        # Display actual number of workers
+        actual_workers = num_workers if num_workers is not None else min(cpu_count(), 4)
+        is_parallel = (actual_workers > 1) and (games_per_iteration > 1)
         print(f"  Running {games_per_iteration} self-play games"
-              f"{f' (parallel: {num_workers} workers)' if (num_workers is None or num_workers > 1) and games_per_iteration > 1 else ' (sequential)'}...")
+              f"{f' (parallel: {actual_workers} workers)' if is_parallel else ' (sequential)'}...")
 
         results = run_parallel_selfplay_games(
             net=net,
@@ -875,6 +878,7 @@ if __name__ == "__main__":
             save_checkpoints=False,
             use_wandb=False,  # Always disable WandB for tests
             use_replay_buffer=False,  # Disable replay buffer for fast testing
+            num_workers=1,  # Single game, no parallelization needed
         )
     elif len(sys.argv) > 1 and sys.argv[1] == "quick":
         # Quick test (light eval, small replay buffer)
@@ -893,6 +897,7 @@ if __name__ == "__main__":
             learning_rate=5e-4,
             max_grad_norm=1.0,
             use_lr_scheduler=False,
+            num_workers=None,  # Auto-detect: min(cpu_count(), 4) for memory efficiency
         )
     else:
         # Full training (AlphaZero-style with replay buffer)
@@ -901,7 +906,7 @@ if __name__ == "__main__":
             use_wandb=use_wandb,
             games_per_iteration=10,
             num_simulations=100,  # Balanced for speed vs quality
-            num_workers=1,  # Sequential execution (multiprocessing has issues)
+            num_workers=None,  # Auto-detect: min(cpu_count(), 4) for parallel self-play
             eval_interval=10,
             eval_games=10,
             past_generations=[5, 10],
