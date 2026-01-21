@@ -1,30 +1,30 @@
 # Network Architecture Review
 
-**Date**: 2026-01-17
-**Status**: Current Implementation Analysis
+**Date**: 2026-01-21
+**Status**: Scaled-up Implementation (Phase 1)
 
 ## Current Architecture
 
 ### Overview
 
 ```
-Total Parameters: 317,682 (~318K)
-Model Size: 1.21 MB
+Total Parameters: 3,051,154 (~3.05M)
+Model Size: 11.64 MB
 ```
 
 **Component Breakdown:**
-- Encoder: 299,520 params (94.3%)
-- Policy Head: 11,217 params (3.5%)
-- Value Head: 6,945 params (2.2%)
+- Encoder: 2,982,400 params (97.7%)
+- Policy Head: 44,417 params (1.5%)
+- Value Head: 24,337 params (0.8%)
 
 ### Architecture Details
 
 **1. Encoder (ResNet-style)**
 ```
 - Input channels: 5 (state encoding)
-- Feature channels: 64
-- Residual blocks: 4
-- Total depth: ~9 layers (stem + 4×2)
+- Feature channels: 128 (upgraded from 64)
+- Residual blocks: 10 (upgraded from 4)
+- Total depth: ~21 layers (stem + 10×2)
 ```
 
 **2. Policy Head**
@@ -32,13 +32,13 @@ Model Size: 1.21 MB
 - Move feature extraction: Average pooling over move cells
 - Piece embedding: 21 pieces → 16 dimensions
 - Additional features: anchor position (2D) + piece size (1D)
-- MLP: (64 + 16 + 3) → 128 → 1
+- MLP: (128 + 16 + 3) → 128 → 1
 - Output: Per-move logit (variable length)
 ```
 
 **3. Value Head**
 ```
-- Spatial pooling: Conv(64→32) + Global Average Pooling
+- Spatial pooling: Conv(128→32) + Global Average Pooling
 - Additional input: Remaining pieces (self + opponent = 42D)
 - MLP: (32 + 42) → 64 → 1
 - Output: Tanh value [-1, +1]
@@ -50,10 +50,10 @@ Model Size: 1.21 MB
 
 | Aspect | AlphaZero | Current Blokus AI | Ratio |
 |--------|-----------|-------------------|-------|
-| **Residual Blocks** | 19-40 blocks | 4 blocks | 4.75x - 10x smaller |
-| **Channels** | 256 channels | 64 channels | 4x smaller |
-| **Total Parameters** | ~80M-350M | 318K | 250x - 1100x smaller |
-| **Model Size** | ~300MB-1.4GB | 1.2MB | 250x - 1167x smaller |
+| **Residual Blocks** | 19-40 blocks | 10 blocks | 1.9x - 4x smaller |
+| **Channels** | 256 channels | 128 channels | 2x smaller |
+| **Total Parameters** | ~80M-350M | 3.05M | 26x - 115x smaller |
+| **Model Size** | ~300MB-1.4GB | 11.6MB | 26x - 121x smaller |
 
 ### Blokus Complexity vs Chess/Go
 
@@ -198,17 +198,24 @@ With more capacity (e.g., 8-12 blocks, 128 channels):
 
 ### Priority 3: Scale Up Architecture (Long-term)
 
-**After establishing baseline, consider:**
+**Status**: ✅ **Completed (2026-01-21)** - Moderate scale-up implemented
 
-1. **Moderate Scale-up** (Recommended first step)
+1. **✅ Moderate Scale-up** (IMPLEMENTED)
    ```python
    PolicyValueNet(
-       channels=128,      # 64 → 128 (4x params)
-       num_blocks=8,      # 4 → 8 (2x depth)
+       channels=128,      # 64 → 128 (2x channels)
+       num_blocks=10,     # 4 → 10 (2.5x depth)
    )
-   # Total: ~2.5M params (8x increase)
-   # Still very manageable
+   # Total: 3.05M params (8.1x increase)
+   # Backward compatible with auto-detection
    ```
+
+   **Implementation Details:**
+   - Default network size upgraded to 128ch/10blocks
+   - Automatic architecture detection from checkpoints
+   - New checkpoint format includes metadata
+   - All 11 existing checkpoints (64ch/4blocks) still loadable
+   - Flexible training configuration via `network_channels`/`network_blocks` parameters
 
 2. **Add Attention Layers** (Advanced)
    - Self-attention after encoder

@@ -179,9 +179,42 @@ def evaluate_net(
     evaluate_winrate("Random", random_policy, "Greedy", greedy_policy, num_games)
 
 
-def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
-    """チェックポイントをディスクから読み込む。
+def _infer_architecture(state_dict: dict) -> tuple[int, int]:
+    """チェックポイントからアーキテクチャを推論する。
 
+    Args:
+        state_dict: チェックポイントのstate_dict
+
+    Returns:
+        (channels, num_blocks) のタプル
+
+    Raises:
+        ValueError: アーキテクチャを推論できない場合
+    """
+    # Stem の出力チャンネル数からチャンネル数を取得
+    stem_weight = state_dict.get("encoder.stem.0.weight")
+    if stem_weight is not None:
+        channels = stem_weight.shape[0]
+    else:
+        raise ValueError("Cannot infer channels from checkpoint")
+
+    # ResidualBlock の最大インデックスからブロック数を取得
+    block_keys = [k for k in state_dict.keys() if k.startswith("encoder.blocks.")]
+    if block_keys:
+        max_block_idx = max(
+            int(k.split(".")[2]) for k in block_keys if k.split(".")[2].isdigit()
+        )
+        num_blocks = max_block_idx + 1
+    else:
+        raise ValueError("Cannot infer num_blocks from checkpoint")
+
+    return channels, num_blocks
+
+
+def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
+    """チェックポイントを自動アーキテクチャ検出でロードする。
+
+    新形式（メタデータ付き）と旧形式（state_dictのみ）の両方に対応。
     デバイス間での互換性を保証（CPU保存→GPU読込、GPU保存→CPU読込など）。
 
     Args:
@@ -192,6 +225,7 @@ def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
 
     Raises:
         FileNotFoundError: チェックポイントが存在しない場合
+        ValueError: アーキテクチャを推論できない場合
     """
     import os
 
@@ -199,11 +233,20 @@ def load_checkpoint(checkpoint_path: str) -> PolicyValueNet:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     device = get_device()
-    net = PolicyValueNet()  # 自動的にdeviceに移動される（__init__内で）
+    checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    # map_locationでデバイス間の互換性を確保
-    state_dict = torch.load(checkpoint_path, map_location=device)
-    net.load_state_dict(state_dict)
+    # 新形式（メタデータ付き）か旧形式（state_dictのみ）かを判定
+    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+        # 新形式: メタデータからアーキテクチャを取得
+        arch = checkpoint['architecture']
+        net = PolicyValueNet(**arch)
+        net.load_state_dict(checkpoint['state_dict'])
+    else:
+        # 旧形式: state_dictから推論
+        channels, num_blocks = _infer_architecture(checkpoint)
+        net = PolicyValueNet(channels=channels, num_blocks=num_blocks)
+        net.load_state_dict(checkpoint)
+
     net.eval()
     return net
 

@@ -185,17 +185,19 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
     各プロセスで独立してモデルをロードし、自己対戦を実行する。
 
     Args:
-        args: (net_state_dict, num_simulations, seed, batch_size,
-               use_batched_mcts, add_dirichlet_noise, temperature_start,
-               temperature_end, temperature_threshold, dirichlet_alpha,
-               dirichlet_epsilon, use_score_diff_targets, normalize_range,
-               use_tree_reuse)
+        args: (net_state_dict, channels, num_blocks, num_simulations, seed,
+               batch_size, use_batched_mcts, add_dirichlet_noise,
+               temperature_start, temperature_end, temperature_threshold,
+               dirichlet_alpha, dirichlet_epsilon, use_score_diff_targets,
+               normalize_range, use_tree_reuse)
 
     Returns:
         (訓練サンプルのリスト, ゲーム結果)
     """
     (
         net_state_dict,
+        channels,
+        num_blocks,
         num_simulations,
         seed,
         batch_size,
@@ -211,8 +213,8 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
         use_tree_reuse,
     ) = args
 
-    # 各プロセスでモデルを再構築
-    net = PolicyValueNet()
+    # 各プロセスでモデルを再構築（アーキテクチャ情報を使用）
+    net = PolicyValueNet(channels=channels, num_blocks=num_blocks)
     net.load_state_dict(net_state_dict)
     net.eval()
 
@@ -307,11 +309,16 @@ def run_parallel_selfplay_games(
 
     # モデルの状態を取得（各プロセスで共有）
     net_state_dict = net.state_dict()
+    # アーキテクチャ情報を取得
+    channels = net.encoder.stem[0].out_channels
+    num_blocks = len(net.encoder.blocks)
 
     # 各ゲーム用の引数を準備
     args_list = [
         (
             net_state_dict,
+            channels,
+            num_blocks,
             num_simulations,
             game_idx,
             batch_size,
@@ -339,7 +346,7 @@ def run_parallel_selfplay_games(
 def save_checkpoint(
     net: PolicyValueNet, iteration: int, checkpoint_dir: str = "models/checkpoints"
 ) -> str:
-    """イテレーション番号付きチェックポイントを保存する。
+    """チェックポイントをアーキテクチャメタデータ付きで保存する。
 
     Args:
         net: 保存するネットワーク
@@ -357,7 +364,21 @@ def save_checkpoint(
         checkpoint_dir, f"checkpoint_iter_{iteration:04d}.pth"
     )
 
-    torch.save(net.state_dict(), checkpoint_path)
+    # メタデータ付きの新形式で保存
+    torch.save(
+        {
+            "state_dict": net.state_dict(),
+            "architecture": {
+                "channels": net.encoder.stem[0].out_channels,
+                "num_blocks": len(net.encoder.blocks),
+                "in_channels": 5,
+                "n_pieces": 21,
+            },
+            "iteration": iteration,
+        },
+        checkpoint_path,
+    )
+
     return checkpoint_path
 
 
@@ -382,16 +403,14 @@ def evaluate_vs_best_model(
     """
     import os
 
-    from blokus_ai.eval import mcts_policy, play_match
+    from blokus_ai.eval import load_checkpoint, mcts_policy, play_match
 
     # ベストモデルが存在しない場合は無条件採用
     if not os.path.exists(best_model_path):
         return True, 1.0
 
-    # ベストモデルをロード
-    best_net = PolicyValueNet()
-    best_net.load_state_dict(torch.load(best_model_path))
-    best_net.eval()
+    # ベストモデルをロード（アーキテクチャ自動検出）
+    best_net = load_checkpoint(best_model_path)
     current_net.eval()
 
     # 対戦実行
@@ -486,6 +505,9 @@ def main(
     arena_games: int = 20,  # Number of games for arena evaluation
     arena_win_rate_threshold: float = 0.55,  # Win rate threshold for model acceptance
     best_model_path: str = "models/best_model.pth",  # Path to best model
+    # Network architecture settings
+    network_channels: int = 128,  # Number of channels in the network
+    network_blocks: int = 10,  # Number of ResNet blocks
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -563,18 +585,25 @@ def main(
             "use_best_model_gating": use_best_model_gating,
             "arena_games": arena_games,
             "arena_win_rate_threshold": arena_win_rate_threshold,
+            "network_channels": network_channels,
+            "network_blocks": network_blocks,
         },
         use_wandb=use_wandb,
     )
 
-    net = PolicyValueNet()
+    net = PolicyValueNet(channels=network_channels, num_blocks=network_blocks)
+    total_params = sum(p.numel() for p in net.parameters())
     device_name = get_device_name()
     print(f"Using device: {device_name}")
+    print(f"Network: {network_channels} channels, {network_blocks} blocks ({total_params:,} parameters)")
     print(
         f"Starting training: {num_iterations} iterations, {games_per_iteration} games/iter"
     )
     print(f"MCTS simulations: {num_simulations}, eval interval: {eval_interval}")
     print(f"Learning rate: {learning_rate}, max gradient norm: {max_grad_norm}")
+
+    # Log total parameters to WandB
+    wandb_logger.log({"total_parameters": total_params}, step=0)
 
     # Initialize optimizer (persistent across iterations)
     optimizer = torch.optim.Adam(

@@ -308,6 +308,111 @@ dummy_moves = {
 # torch.onnx.export(net, (dummy_board, dummy_self_rem, dummy_opp_rem, dummy_moves), "blokus.onnx")
 ```
 
+## ネットワークアーキテクチャの設定
+
+### デフォルト設定（新規）
+
+**2026-01-21以降のデフォルト:**
+- チャンネル数: 128
+- ResNetブロック数: 10
+- パラメータ数: ~3.05M
+- モデルサイズ: ~11.6 MB
+
+**特徴:**
+- より強力なポリシー（MCTS依存削減）
+- より良い汎化性能
+- 既存チェックポイント（64ch/4blocks）との完全互換性
+
+### カスタムアーキテクチャ
+
+アーキテクチャサイズを変更する場合:
+
+```bash
+# 小規模（高速・軽量）
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=20,
+    network_channels=64,
+    network_blocks=4,
+)
+"
+
+# デフォルト（推奨）
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=20,
+    network_channels=128,
+    network_blocks=10,
+)
+"
+
+# 大規模（高性能・低速）
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=20,
+    network_channels=256,
+    network_blocks=15,
+)
+"
+```
+
+### アーキテクチャ比較実験
+
+異なるサイズのネットワークで性能を比較:
+
+```python
+# 実験1: 小規模ネットワーク（64ch/4blocks）
+from blokus_ai.train import main
+main(
+    num_iterations=20,
+    network_channels=64,
+    network_blocks=4,
+    best_model_path="models/best_small.pth",
+)
+
+# 実験2: 中規模ネットワーク（128ch/10blocks）
+main(
+    num_iterations=20,
+    network_channels=128,
+    network_blocks=10,
+    best_model_path="models/best_medium.pth",
+)
+
+# 評価: Head-to-Head対戦
+from blokus_ai.eval import evaluate_winrate, mcts_policy, load_checkpoint
+
+small_net = load_checkpoint("models/checkpoints/checkpoint_iter_0020.pth")
+medium_net = load_checkpoint("models/best_medium.pth")
+
+evaluate_winrate(
+    "Small (64ch/4blocks)",
+    lambda e, s: mcts_policy(small_net, e, s, num_simulations=500),
+    "Medium (128ch/10blocks)",
+    lambda e, s: mcts_policy(medium_net, e, s, num_simulations=500),
+    num_games=50
+)
+```
+
+### 後方互換性
+
+**重要:** すべての既存チェックポイントは引き続き動作します。
+
+- 旧形式（state_dictのみ）: アーキテクチャ自動検出
+- 新形式（メタデータ付き）: メタデータから高速ロード
+
+```python
+from blokus_ai.eval import load_checkpoint
+
+# 64ch/4blocks の旧チェックポイント
+old_net = load_checkpoint("models/checkpoints/checkpoint_iter_0010.pth")  # 自動検出
+
+# 128ch/10blocks の新チェックポイント
+new_net = load_checkpoint("models/checkpoints/checkpoint_iter_0051.pth")  # メタデータ使用
+```
+
 ## 次のステップ
 
 ### 短期（完了済み）
@@ -331,4 +436,4 @@ dummy_moves = {
 ---
 
 作成日: 2026-01-11
-最終更新: 2026-01-11 21:45 UTC
+最終更新: 2026-01-21 (Network Architecture Configuration追加)

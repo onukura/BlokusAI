@@ -141,6 +141,8 @@ Dependencies are managed via `pyproject.toml` with uv.
 
 2. **Neural Network** (`net.py`)
    - `PolicyValueNet`: ResNet-style convolutional encoder + two heads
+     - Default: 128 channels, 10 ResNet blocks, ~3.05M parameters
+     - Configurable via `channels` and `num_blocks` parameters
    - **Policy head**: Scores each legal move by:
      - Extracting feature map values at cells the move would occupy
      - Averaging those features into a "move vector"

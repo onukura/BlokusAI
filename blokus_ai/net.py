@@ -87,8 +87,8 @@ class PolicyValueNet(nn.Module):
     def __init__(
         self,
         in_channels: int = 5,
-        channels: int = 64,
-        num_blocks: int = 4,
+        channels: int = 128,
+        num_blocks: int = 10,
         n_pieces: int = 21,
     ):
         """ネットワークを初期化する。
