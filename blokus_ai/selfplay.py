@@ -80,7 +80,12 @@ def selfplay_game(
         np.random.seed(seed)
     engine = Engine(GameConfig())
     state = engine.initial_state()
-    mcts = MCTS(engine, net)
+    mcts = MCTS(
+        engine,
+        net,
+        use_score_diff_values=use_score_diff_targets,
+        normalize_range=normalize_range,
+    )
     samples: List[Sample] = []
     move_count = 0
     root = None  # 前手からのツリーを保持

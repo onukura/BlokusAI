@@ -70,6 +70,8 @@ class MCTS:
         c_puct_base: float = 19652,
         c_puct_init: float = 1.25,
         use_q_normalization: bool = True,
+        use_score_diff_values: bool = True,
+        normalize_range: float = 50.0,
     ):
         """MCTSを初期化する。
 
@@ -79,12 +81,16 @@ class MCTS:
             c_puct_base: PUCT動的係数のベース値（デフォルト19652、AlphaZero標準）
             c_puct_init: PUCT動的係数の初期値（デフォルト1.25、AlphaZero標準）
             use_q_normalization: Q値正規化を使用（デフォルトTrue、KataGoスタイル）
+            use_score_diff_values: スコア差ベースの価値を使用（デフォルトTrue）
+            normalize_range: スコア差の正規化範囲（デフォルト50.0）
         """
         self.engine = engine
         self.net = net
         self.c_puct_base = c_puct_base
         self.c_puct_init = c_puct_init
         self.use_q_normalization = use_q_normalization
+        self.use_score_diff_values = use_score_diff_values
+        self.normalize_range = normalize_range
 
     def _compute_c_puct(self, total_visit_count: float) -> float:
         """訪問回数に基づいて動的PUCT係数を計算する。
@@ -140,6 +146,26 @@ class MCTS:
 
         return Q_normalized
 
+    def _evaluate_terminal(self, state: GameState, current_player: int) -> float:
+        """終端状態を評価する。
+
+        設定に応じて離散値（勝敗）または連続値（スコア差）を返す。
+
+        Args:
+            state: 終端状態
+            current_player: 現在のプレイヤーID
+
+        Returns:
+            現在プレイヤー視点の評価値
+        """
+        if self.use_score_diff_values:
+            outcome = self.engine.outcome_duo_normalized(state, self.normalize_range)
+        else:
+            outcome = float(self.engine.outcome_duo(state))
+
+        # プレイヤー視点に変換
+        return outcome if current_player == 0 else -outcome
+
     def run(
         self,
         root: Node,
@@ -166,6 +192,9 @@ class MCTS:
         # ルートノードを事前展開（Dirichletノイズ付き）
         if not root.is_expanded():
             self._expand(root, add_dirichlet_noise, dirichlet_alpha, dirichlet_epsilon)
+        elif add_dirichlet_noise:
+            # ツリー再利用時: 既に展開済みだがノイズは再適用
+            self._apply_dirichlet_noise_to_root(root, dirichlet_alpha, dirichlet_epsilon)
 
         for _ in range(num_simulations):
             self._simulate(root)
@@ -175,6 +204,31 @@ class MCTS:
             else np.zeros(len(root.moves), dtype=np.float32)
         )
         return visits
+
+    def _apply_dirichlet_noise_to_root(
+        self,
+        root: Node,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
+    ) -> None:
+        """既に展開済みのルートノードにDirichletノイズを再適用する。
+
+        ツリー再利用時に探索の多様性を維持するために使用。
+
+        Args:
+            root: ルートノード（展開済み）
+            dirichlet_alpha: Dirichlet分布のalphaパラメータ
+            dirichlet_epsilon: ノイズ混合率
+        """
+        if not root.is_expanded():
+            return  # 未展開の場合は何もしない（_expand()で処理される）
+
+        if len(root.moves) == 0:
+            return  # 手がない場合は何もしない
+
+        # Dirichletノイズを生成して適用
+        noise = np.random.dirichlet([dirichlet_alpha] * len(root.moves)).astype(np.float32)
+        root.P = ((1 - dirichlet_epsilon) * root.P + dirichlet_epsilon * noise).astype(np.float32)
 
     def run_batched(
         self,
@@ -206,6 +260,9 @@ class MCTS:
         # ルートノードを事前展開（Dirichletノイズ付き）
         if not root.is_expanded():
             self._expand(root, add_dirichlet_noise, dirichlet_alpha, dirichlet_epsilon)
+        elif add_dirichlet_noise:
+            # バッチMCTSでもツリー再利用時のノイズ再適用
+            self._apply_dirichlet_noise_to_root(root, dirichlet_alpha, dirichlet_epsilon)
 
         for batch_start in range(0, num_simulations, batch_size):
             current_batch_size = min(batch_size, num_simulations - batch_start)
@@ -332,9 +389,8 @@ class MCTS:
         for i, node in enumerate(nodes):
             # 終端チェック
             if self.engine.is_terminal(node.state):
-                outcome = self.engine.outcome_duo(node.state)
-                player = node.state.turn
-                terminal_values.append((i, float(outcome if player == 0 else -outcome)))
+                value = self._evaluate_terminal(node.state, node.state.turn)
+                terminal_values.append((i, value))
                 continue
 
             # 合法手生成
@@ -423,9 +479,7 @@ class MCTS:
         """
         # Check terminal first to avoid infinite loops
         if self.engine.is_terminal(node.state):
-            outcome = self.engine.outcome_duo(node.state)
-            player = node.state.turn
-            return float(outcome if player == 0 else -outcome)
+            return self._evaluate_terminal(node.state, node.state.turn)
 
         if not node.is_expanded():
             return self._expand(node)
@@ -434,9 +488,7 @@ class MCTS:
         if not node.moves:
             # This should have been caught by is_terminal, but as a fallback
             # we evaluate the current position
-            outcome = self.engine.outcome_duo(node.state)
-            player = node.state.turn
-            return float(outcome if player == 0 else -outcome)
+            return self._evaluate_terminal(node.state, node.state.turn)
 
         # PUCT選択（Rust版使用可能な場合）
         total_N = np.sum(node.N)
@@ -500,9 +552,7 @@ class MCTS:
             # or when the current player must pass (handled in selfplay.py)
             # Return 0 as a neutral value, or evaluate the terminal state
             if self.engine.is_terminal(node.state):
-                outcome = self.engine.outcome_duo(node.state)
-                player = node.state.turn
-                return float(outcome if player == 0 else -outcome)
+                return self._evaluate_terminal(node.state, node.state.turn)
             # Non-terminal pass state - return neutral value
             # This shouldn't normally be reached as selfplay.py handles passes
             return 0.0

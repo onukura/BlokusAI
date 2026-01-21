@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from blokus_ai.device import get_device, get_device_name
-from blokus_ai.encode import apply_symmetry_to_board, batch_move_features
+from blokus_ai.encode import apply_symmetry_to_board, apply_symmetry_to_moves, batch_move_features
 from blokus_ai.engine import Engine
 from blokus_ai.net import PolicyValueNet
 from blokus_ai.replay_buffer import ReplayBuffer
@@ -121,14 +121,22 @@ def train_epoch(
             symmetries = range(8) if use_symmetry_augmentation else [0]
 
             for symmetry_id in symmetries:
-                # ボードのみを対称変換（moves, policy, 残りピースはそのまま）
+                # ボードと手を一緒に変換して座標系の一貫性を保つ
                 if symmetry_id == 0:
                     x_transformed = sample.x
+                    moves_transformed = sample.moves
                 else:
                     x_transformed = apply_symmetry_to_board(sample.x, symmetry_id)
+                    moves_transformed = apply_symmetry_to_moves(
+                        sample.moves,
+                        sample.x.shape[1],  # height
+                        sample.x.shape[2],  # width
+                        symmetry_id
+                    )
 
                 move_features = batch_move_features(
-                    sample.moves, x_transformed.shape[1], x_transformed.shape[2]
+                    moves_transformed,  # 変換済みの手を使用
+                    x_transformed.shape[1], x_transformed.shape[2]
                 )
                 # 入力テンソルをデバイスに移動
                 move_tensors = {
@@ -454,6 +462,7 @@ def main(
     min_buffer_size: int = 1000,
     replay_window_size: int | None = None,  # Sample from latest N samples (None = all)
     learning_rate: float = 1e-3,
+    weight_decay: float = 1e-4,  # L2 regularization (AlphaZero standard)
     policy_loss_weight: float = 1.0,
     value_loss_weight: float = 0.5,  # Increased from 0.1 to 0.5 for better value learning
     max_grad_norm: float = 1.0,
@@ -528,6 +537,7 @@ def main(
             "eval_games": eval_games,
             "past_generations": past_generations,
             "learning_rate": learning_rate,
+            "weight_decay": weight_decay,
             "policy_loss_weight": policy_loss_weight,
             "value_loss_weight": value_loss_weight,
             "max_grad_norm": max_grad_norm,
@@ -567,7 +577,11 @@ def main(
     print(f"Learning rate: {learning_rate}, max gradient norm: {max_grad_norm}")
 
     # Initialize optimizer (persistent across iterations)
-    optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(
+        net.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay
+    )
 
     # Initialize learning rate scheduler (optional)
     scheduler = None

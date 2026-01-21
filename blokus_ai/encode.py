@@ -186,9 +186,11 @@ def apply_symmetry_to_moves(
 def apply_symmetry_to_policy(
     policy: np.ndarray, moves: List[Move], h: int, w: int, symmetry_id: int
 ) -> np.ndarray:
-    """ポリシー確率を対称変換に合わせて並び替える。
+    """ポリシー確率を対称変換に合わせて返す。
 
-    変換後の手と元の手の対応を見つけ、ポリシー確率を適切に並び替える。
+    重要: ポリシーは手のインデックスで定義されているため、
+    手とボードを一緒に変換する限り、ポリシー自体は変換不要。
+    手の順序は変わらず、インデックスで対応関係が保たれる。
 
     Args:
         policy: ポリシー確率配列
@@ -198,15 +200,6 @@ def apply_symmetry_to_policy(
         symmetry_id: 対称性ID（0-7）
 
     Returns:
-        並び替えられたポリシー配列
+        そのままのポリシー配列（変換不要）
     """
-    if symmetry_id == 0:
-        return policy
-
-    transformed_moves = apply_symmetry_to_moves(moves, h, w, symmetry_id)
-
-    # 変換後の手と元の手のマッピングを作成
-    # （簡略化: 手の順序は変わらないと仮定）
-    # 実際には、セルの集合が一致する手を見つける必要がある
-    # ここでは、インデックスがそのまま対応すると仮定
-    return policy.copy()
+    return policy
