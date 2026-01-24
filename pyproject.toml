@@ -12,17 +12,27 @@ dependencies = [
   "python-dotenv>=1.2.1",
 ]
 
+#[[tool.uv.index]]
+#name = "pytorch-cpu"
+#url = "https://download.pytorch.org/whl/cpu"
+#explicit = true
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
+#torch = [
+#  { index = "pytorch-cpu" },
+#]
+#torchvision = [
+#  { index = "pytorch-cpu" },
+#]
 torch = [
-  { index = "pytorch-cpu" },
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 torchvision = [
-  { index = "pytorch-cpu" },
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [build-system]
@@ -41,24 +51,18 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["blokus_ai"]
-omit = [
-    "*/tests/*",
-    "*/test_*.py",
-    "*/__pycache__/*",
-    "*/venv/*",
-    "*/.venv/*",
-]
+omit = ["*/tests/*", "*/test_*.py", "*/__pycache__/*", "*/venv/*", "*/.venv/*"]
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if __name__ == .__main__.:",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-    "if typing.TYPE_CHECKING:",
-    "@abstract",
+  "pragma: no cover",
+  "def __repr__",
+  "if __name__ == .__main__.:",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+  "if typing.TYPE_CHECKING:",
+  "@abstract",
 ]
 precision = 2
 show_missing = true
@@ -68,7 +72,12 @@ skip_covered = false
 directory = "htmlcov"
 
 [tool.ruff]
-include = ["pyproject.toml", "blokus_ai/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+include = [
+  "pyproject.toml",
+  "blokus_ai/**/*.py",
+  "tests/**/*.py",
+  "scripts/**/*.py",
+]
 target-version = "py313"
 line-length = 88
 indent-width = 4
@@ -78,7 +87,7 @@ select = [
   "E", # pycodestyle errors
   "W", # pycodestyle warnings
   "F", # pyflakes
-  "I",  # isort
+  "I", # isort
   "C", # flake8-comprehensions
   "B", # flake8-bugbear
 ]
@@ -97,7 +106,13 @@ ignore = [
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
-section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+section-order = [
+  "future",
+  "standard-library",
+  "third-party",
+  "first-party",
+  "local-folder",
+]
 split-on-trailing-comma = true
 
 [tool.ruff.format]
