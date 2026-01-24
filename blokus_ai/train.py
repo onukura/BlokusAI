@@ -257,6 +257,7 @@ def run_parallel_selfplay_games(
     use_score_diff_targets: bool = True,
     normalize_range: float = 50.0,
     use_tree_reuse: bool = True,
+    verbose: bool = True,
 ) -> List[Tuple[List[Sample], float]]:
     """複数の自己対戦ゲームを並列実行する。
 
@@ -276,6 +277,7 @@ def run_parallel_selfplay_games(
         use_score_diff_targets: スコア差ベースの価値ターゲットを使用するか
         normalize_range: スコア差の正規化範囲
         use_tree_reuse: MCTSツリー再利用を有効化（AlphaZero標準）
+        verbose: 詳細ログを表示するか
 
     Returns:
         [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
@@ -306,6 +308,11 @@ def run_parallel_selfplay_games(
                     use_tree_reuse=use_tree_reuse,
                 )
             results.append((samples, outcome))
+            if verbose:
+                # ゲームの結果を表示
+                num_turns = len(samples)
+                outcome_str = f"{outcome:+.2f}" if use_score_diff_targets else f"{outcome:+.0f}"
+                print(f"    Game {game_idx + 1}/{num_games}: {num_turns} turns, outcome={outcome_str}")
         return results
 
     # モデルの状態を取得（各プロセスで共有）
@@ -633,7 +640,11 @@ def main(
         print("Replay buffer disabled (legacy mode)")
 
     for iteration in range(num_iterations):
-        print(f"\n=== Iteration {iteration + 1}/{num_iterations} ===")
+        import time
+        iteration_start_time = time.time()
+        print(f"\n{'='*60}")
+        print(f"Iteration {iteration + 1}/{num_iterations}")
+        print(f"{'='*60}")
 
         # Self-play (parallel execution)
         all_samples = []
@@ -643,9 +654,10 @@ def main(
         # Display actual number of workers
         actual_workers = num_workers if num_workers is not None else min(multiprocessing.cpu_count(), 4)
         is_parallel = (actual_workers > 1) and (games_per_iteration > 1)
-        print(f"  Running {games_per_iteration} self-play games"
+        print(f"[Self-Play] Running {games_per_iteration} games"
               f"{f' (parallel: {actual_workers} workers)' if is_parallel else ' (sequential)'}...")
 
+        selfplay_start_time = time.time()
         results = run_parallel_selfplay_games(
             net=net,
             num_games=games_per_iteration,
@@ -662,6 +674,7 @@ def main(
             use_score_diff_targets=use_score_diff_targets,
             normalize_range=normalize_range,
             use_tree_reuse=use_tree_reuse,
+            verbose=(not is_parallel),  # 逐次実行時のみ詳細ログ
         )
 
         for samples, outcome in results:
@@ -669,12 +682,31 @@ def main(
             all_outcomes.extend([outcome] * len(samples))
             game_lengths.append(len(samples))
 
+        selfplay_time = time.time() - selfplay_start_time
+
+        # ゲーム結果のサマリーを表示
+        if use_score_diff_targets:
+            # スコア差ベースの場合
+            outcomes_array = np.array([results[i][1] for i in range(len(results))])
+            avg_outcome = float(np.mean(outcomes_array))
+            print(f"[Self-Play] Completed in {selfplay_time:.1f}s")
+            print(f"  Results: {len(results)} games, avg_outcome={avg_outcome:+.2f}, "
+                  f"avg_game_length={np.mean(game_lengths):.1f} turns")
+        else:
+            # 勝敗ベースの場合
+            wins = sum(1 for _, outcome in results if outcome > 0)
+            losses = sum(1 for _, outcome in results if outcome < 0)
+            draws = sum(1 for _, outcome in results if outcome == 0)
+            print(f"[Self-Play] Completed in {selfplay_time:.1f}s")
+            print(f"  Results: W={wins} L={losses} D={draws}, "
+                  f"avg_game_length={np.mean(game_lengths):.1f} turns")
+
         # Add samples to replay buffer (if enabled)
         if use_replay_buffer:
             for i, sample in enumerate(all_samples):
                 replay_buffer.add(sample, all_outcomes[i])
 
-            print(f"  Buffer: {len(replay_buffer)}/{buffer_size} samples "
+            print(f"[Buffer] {len(replay_buffer)}/{buffer_size} samples "
                   f"({replay_buffer.get_utilization():.1%} full)")
 
         # Training
@@ -685,13 +717,15 @@ def main(
         if use_replay_buffer:
             # Replay buffer mode: Sample and train
             if not replay_buffer.is_ready(min_buffer_size):
-                print(f"  Skipping training: buffer has {len(replay_buffer)} samples "
+                print(f"[Training] Skipping: buffer has {len(replay_buffer)} samples "
                       f"(need {min_buffer_size})")
                 avg_loss = 0.0
                 avg_policy_loss = 0.0
                 avg_value_loss = 0.0
             else:
                 # Train for num_training_steps
+                print(f"[Training] Running {num_training_steps} training steps (batch_size={batch_size})...")
+                training_start_time = time.time()
                 for step in range(num_training_steps):
                     samples, outcomes = replay_buffer.sample(
                         batch_size, window_size=replay_window_size
@@ -706,8 +740,23 @@ def main(
                     losses.append(avg_loss)
                     policy_losses.append(avg_policy_loss)
                     value_losses.append(avg_value_loss)
+
+                    # 10ステップごとに進行状況を表示
+                    if (step + 1) % 10 == 0 or (step + 1) == num_training_steps:
+                        current_avg_loss = float(np.mean(losses[-10:]))
+                        current_avg_policy_loss = float(np.mean(policy_losses[-10:]))
+                        current_avg_value_loss = float(np.mean(value_losses[-10:]))
+                        print(f"  Step {step + 1}/{num_training_steps}: "
+                              f"loss={current_avg_loss:.4f} "
+                              f"(policy={current_avg_policy_loss:.4f}, "
+                              f"value={current_avg_value_loss:.4f})")
+
+                training_time = time.time() - training_start_time
+                print(f"[Training] Completed in {training_time:.1f}s")
         else:
             # Legacy mode: Train on current iteration samples only
+            print(f"[Training] Training on {len(all_samples)} samples (legacy mode)...")
+            training_start_time = time.time()
             for i, sample in enumerate(all_samples):
                 mini_samples = [sample]
                 mini_outcomes = [all_outcomes[i]]
@@ -722,6 +771,19 @@ def main(
                 policy_losses.append(avg_policy_loss)
                 value_losses.append(avg_value_loss)
 
+                # 10サンプルごとに進行状況を表示
+                if (i + 1) % 10 == 0 or (i + 1) == len(all_samples):
+                    current_avg_loss = float(np.mean(losses[-10:]))
+                    current_avg_policy_loss = float(np.mean(policy_losses[-10:]))
+                    current_avg_value_loss = float(np.mean(value_losses[-10:]))
+                    print(f"  Sample {i + 1}/{len(all_samples)}: "
+                          f"loss={current_avg_loss:.4f} "
+                          f"(policy={current_avg_policy_loss:.4f}, "
+                          f"value={current_avg_value_loss:.4f})")
+
+            training_time = time.time() - training_start_time
+            print(f"[Training] Completed in {training_time:.1f}s")
+
         avg_loss = float(np.mean(losses)) if losses else 0.0
         avg_policy_loss = float(np.mean(policy_losses)) if policy_losses else 0.0
         avg_value_loss = float(np.mean(value_losses)) if value_losses else 0.0
@@ -733,14 +795,15 @@ def main(
             scheduler.step(avg_loss)
             new_lr = optimizer.param_groups[0]['lr']
             if new_lr != current_lr:
-                print(f"  Learning rate reduced: {current_lr:.6f} -> {new_lr:.6f}")
+                print(f"[Scheduler] Learning rate reduced: {current_lr:.6f} -> {new_lr:.6f}")
                 current_lr = new_lr
 
-        print(
-            f"Iteration {iteration + 1}: {len(all_samples)} samples, "
-            f"avg_loss={avg_loss:.4f}, policy_loss={avg_policy_loss:.4f}, "
-            f"value_loss={avg_value_loss:.4f}, lr={current_lr:.6f}"
-        )
+        iteration_time = time.time() - iteration_start_time
+        print(f"\n[Summary] Iteration {iteration + 1}/{num_iterations}")
+        print(f"  Samples: {len(all_samples)}")
+        print(f"  Loss: {avg_loss:.4f} (policy={avg_policy_loss:.4f}, value={avg_value_loss:.4f})")
+        print(f"  Learning rate: {current_lr:.6f}")
+        print(f"  Time: {iteration_time:.1f}s")
 
         # Log training metrics to WandB
         metrics = {
@@ -767,7 +830,10 @@ def main(
 
         # Periodic evaluation
         if (iteration + 1) % eval_interval == 0:
-            print(f"\n--- Evaluation at iteration {iteration + 1} ---")
+            print(f"\n{'='*60}")
+            print(f"Evaluation at iteration {iteration + 1}")
+            print(f"{'='*60}")
+            eval_start_time = time.time()
             net.eval()
             with torch.no_grad():
                 eval_results = evaluate_net_with_history(
@@ -779,6 +845,8 @@ def main(
                     checkpoint_dir=checkpoint_dir,
                 )
             net.train()
+            eval_time = time.time() - eval_start_time
+            print(f"[Evaluation] Completed in {eval_time:.1f}s")
 
             # Log evaluation metrics to WandB
             wandb_metrics = {}
@@ -894,6 +962,7 @@ def main(
 
 if __name__ == "__main__":
     import sys
+    import os
 
     # Check for --no-wandb flag
     use_wandb = "--no-wandb" not in sys.argv
@@ -936,12 +1005,12 @@ if __name__ == "__main__":
             use_wandb=use_wandb,
             games_per_iteration=10,
             num_simulations=100,  # Balanced for speed vs quality
-            num_workers=None,  # Auto-detect: min(multiprocessing.cpu_count(), 4) for parallel self-play
+            num_workers=1,  # Auto-detect: min(multiprocessing.cpu_count(), 4) for parallel self-play
             eval_interval=10,
             eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,
-            batch_size=32,
+            batch_size=128,
             num_training_steps=100,
             min_buffer_size=1000,
             learning_rate=5e-4,
