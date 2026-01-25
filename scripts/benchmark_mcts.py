@@ -12,8 +12,8 @@ print(f"Rust統合: {'有効' if USE_RUST else '無効'}\n")
 # 設定
 config = GameConfig()
 engine = Engine(config)
-net = PolicyValueNet(in_channels=5, channels=64, num_blocks=4, n_pieces=21)
-mcts = MCTS(engine, net, c_puct=1.5)
+net = PolicyValueNet(channels=64, num_blocks=4, n_pieces=21)
+mcts = MCTS(engine, net)
 
 print("=== MCTS基本テスト ===")
 state = engine.initial_state()

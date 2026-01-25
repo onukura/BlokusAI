@@ -49,21 +49,20 @@ def main():
     print(f"\n[4] テスト推論:")
     try:
         import numpy as np
-        from blokus_ai.encode import batch_move_features
         from blokus_ai.net import predict
 
         # ダミーデータ作成
-        board = np.random.randn(5, 14, 14).astype(np.float32)
+        board = np.random.randn(40, 14, 14).astype(np.float32)
         self_rem = np.ones(21, dtype=np.float32)
         opp_rem = np.ones(21, dtype=np.float32)
-        move_features = batch_move_features(
-            [
-                {"piece_id": 0, "anchor": (0, 0), "cells": [(0, 0), (0, 1)]},
-                {"piece_id": 1, "anchor": (1, 1), "cells": [(1, 1), (1, 2)]},
-            ],
-            H=14,
-            W=14,
-        )
+        move_features = {
+            "piece_id": np.array([0, 1], dtype=np.int64),
+            "anchor": np.array([[0.0, 0.0], [1.0 / 14, 1.0 / 14]], dtype=np.float32),
+            "size": np.array([2, 2], dtype=np.float32),
+            "corner_gain": np.zeros(2, dtype=np.float32),
+            "opp_corner_block": np.zeros(2, dtype=np.float32),
+            "cells": [[(0, 0), (0, 1)], [(1, 1), (1, 2)]],
+        }
 
         # 推論実行
         with torch.no_grad():

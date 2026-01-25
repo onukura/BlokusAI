@@ -194,12 +194,29 @@ def _corner_connectivity_map(corners: np.ndarray) -> np.ndarray:
     return connectivity
 
 
+MOVE_COUNT_NORMALIZATION = 200.0
+CORNER_GAIN_NORMALIZATION = 10.0
+
+
 def _remaining_piece_stats(remaining: np.ndarray) -> Tuple[int, int]:
     """残りピースの総セル数と最大サイズを返す。"""
     sizes = [PIECES[i].variants[0].size for i in range(len(remaining)) if remaining[i]]
     if not sizes:
         return 0, 0
     return int(sum(sizes)), int(max(sizes))
+
+
+def _piece_size_histogram(remaining: np.ndarray) -> np.ndarray:
+    """残りピースのサイズ分布（1-5）を返す。"""
+    counts = np.zeros(5, dtype=np.float32)
+    for piece_id, is_remaining in enumerate(remaining):
+        if not is_remaining:
+            continue
+        size = PIECES[piece_id].variants[0].size
+        if 1 <= size <= 5:
+            counts[size - 1] += 1
+    total = max(float(len(remaining)), 1.0)
+    return counts / total
 
 
 def encode_state_duo_v2(
@@ -219,6 +236,8 @@ def encode_state_duo_v2(
     - 封鎖領域（自分/相手）
     - ピース残量指標（最大サイズ/残りセル比率）
     - バランス指標（占有差/残りセル差）
+    - 残りピースのサイズ分布（自分/相手）
+    - 合法手数指標（自分/相手）
     - 追加スカラー: ゲーム進行度
 
     Args:
@@ -290,6 +309,22 @@ def encode_state_duo_v2(
     occupied_diff_map = np.full(board.shape, occupied_diff, dtype=np.float32)
     remaining_diff_map = np.full(board.shape, remaining_diff, dtype=np.float32)
 
+    # 残りピースのサイズ分布（1-5セル）
+    self_size_hist = _piece_size_histogram(state.remaining[player])
+    opp_size_hist = _piece_size_histogram(state.remaining[opp])
+    self_size_maps = [
+        np.full(board.shape, val, dtype=np.float32) for val in self_size_hist
+    ]
+    opp_size_maps = [
+        np.full(board.shape, val, dtype=np.float32) for val in opp_size_hist
+    ]
+
+    # 合法手数指標（モビリティ）
+    self_move_count = min(len(moves) / MOVE_COUNT_NORMALIZATION, 1.0)
+    opp_move_count = min(len(opp_moves) / MOVE_COUNT_NORMALIZATION, 1.0)
+    self_move_count_map = np.full(board.shape, self_move_count, dtype=np.float32)
+    opp_move_count_map = np.full(board.shape, opp_move_count, dtype=np.float32)
+
     # チャンネル統合
     stacked = np.stack(
         [
@@ -315,6 +350,10 @@ def encode_state_duo_v2(
             opp_remaining_ratio,
             occupied_diff_map,
             remaining_diff_map,
+            *self_size_maps,
+            *opp_size_maps,
+            self_move_count_map,
+            opp_move_count_map,
         ],
         axis=0,
     )
@@ -329,7 +368,14 @@ def encode_state_duo_v2(
     return stacked, self_rem, opp_rem, game_phase
 
 
-def batch_move_features(moves: Sequence[Move], h: int, w: int) -> Dict[str, np.ndarray]:
+def batch_move_features(
+    moves: Sequence[Move],
+    h: int,
+    w: int,
+    *,
+    engine: Engine | None = None,
+    board: np.ndarray | None = None,
+) -> Dict[str, np.ndarray]:
     """指し手のバッチをニューラルネット入力用の特徴量に変換する。
 
     各指し手について以下を抽出:
@@ -344,7 +390,8 @@ def batch_move_features(moves: Sequence[Move], h: int, w: int) -> Dict[str, np.n
         w: ボードの幅
 
     Returns:
-        特徴量の辞書（"piece_id", "anchor", "size", "cells"）
+        特徴量の辞書（"piece_id", "anchor", "size", "cells", "corner_gain",
+        "opp_corner_block"）
     """
     piece_ids = np.array([move.piece_id for move in moves], dtype=np.int64)
     anchors = np.array(
@@ -352,11 +399,41 @@ def batch_move_features(moves: Sequence[Move], h: int, w: int) -> Dict[str, np.n
     )
     sizes = np.array([move.size for move in moves], dtype=np.float32)
     cells = [move.cells for move in moves]
+    corner_gain = np.zeros(len(moves), dtype=np.float32)
+    opp_corner_block = np.zeros(len(moves), dtype=np.float32)
+
+    if engine is not None and board is not None and moves:
+        base_corners = {}
+        base_opp_corners = {}
+        for idx, move in enumerate(moves):
+            player = move.player
+            opp = (player + 1) % 2
+            if player not in base_corners:
+                base_corners[player] = engine.corner_candidates(board, player)
+                base_opp_corners[player] = engine.corner_candidates(board, opp)
+            board_after = board.copy()
+            for x, y in move.cells:
+                board_after[y, x] = player + 1
+            after_self = engine.corner_candidates(board_after, player)
+            after_opp = engine.corner_candidates(board_after, opp)
+            gain = float(after_self.sum() - base_corners[player].sum())
+            block = float(base_opp_corners[player].sum() - after_opp.sum())
+            corner_gain[idx] = max(gain, 0.0)
+            opp_corner_block[idx] = max(block, 0.0)
+
+        corner_gain = np.clip(
+            corner_gain / CORNER_GAIN_NORMALIZATION, 0.0, 1.0
+        ).astype(np.float32)
+        opp_corner_block = np.clip(
+            opp_corner_block / CORNER_GAIN_NORMALIZATION, 0.0, 1.0
+        ).astype(np.float32)
     return {
         "piece_id": piece_ids,
         "anchor": anchors,
         "size": sizes,
         "cells": cells,
+        "corner_gain": corner_gain,
+        "opp_corner_block": opp_corner_block,
     }
 
 

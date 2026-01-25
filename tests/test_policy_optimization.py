@@ -26,13 +26,19 @@ def test_policy_correctness():
     # Setup
     engine = Engine(GameConfig())
     state = engine.initial_state()
-    net = PolicyValueNet()
+    net = PolicyValueNet(in_channels=5)
     net.eval()
 
     # Get initial position
     x, self_rem, opp_rem = encode_state_duo(engine, state)
     moves = engine.legal_moves(state)
-    move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+    move_features = batch_move_features(
+        moves,
+        x.shape[1],
+        x.shape[2],
+        engine=engine,
+        board=state.board,
+    )
 
     # Convert to tensors
     board = torch.from_numpy(x[None]).float().to(net.device)
@@ -42,6 +48,8 @@ def test_policy_correctness():
         'piece_id': torch.from_numpy(move_features['piece_id']).long().to(net.device),
         'anchor': torch.from_numpy(move_features['anchor']).float().to(net.device),
         'size': torch.from_numpy(move_features['size']).float().to(net.device),
+        'corner_gain': torch.from_numpy(move_features['corner_gain']).float().to(net.device),
+        'opp_corner_block': torch.from_numpy(move_features['opp_corner_block']).float().to(net.device),
         'cells': move_features['cells'],
     }
 
@@ -75,7 +83,13 @@ def test_policy_correctness():
         if not moves:
             continue
 
-        move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+        move_features = batch_move_features(
+            moves,
+            x.shape[1],
+            x.shape[2],
+            engine=engine,
+            board=test_state.board,
+        )
 
         board = torch.from_numpy(x[None]).float().to(net.device)
         self_rem_t = torch.from_numpy(self_rem[None]).float().to(net.device)
@@ -84,6 +98,8 @@ def test_policy_correctness():
             'piece_id': torch.from_numpy(move_features['piece_id']).long().to(net.device),
             'anchor': torch.from_numpy(move_features['anchor']).float().to(net.device),
             'size': torch.from_numpy(move_features['size']).float().to(net.device),
+            'corner_gain': torch.from_numpy(move_features['corner_gain']).float().to(net.device),
+            'opp_corner_block': torch.from_numpy(move_features['opp_corner_block']).float().to(net.device),
             'cells': move_features['cells'],
         }
 
@@ -106,7 +122,7 @@ def test_policy_performance():
 
     # Setup
     engine = Engine(GameConfig())
-    net = PolicyValueNet()
+    net = PolicyValueNet(in_channels=5)
     net.eval()
 
     # Prepare test positions
@@ -125,7 +141,13 @@ def test_policy_performance():
         x, self_rem, opp_rem = encode_state_duo(engine, state)
         moves = engine.legal_moves(state)
         if moves:
-            move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+            move_features = batch_move_features(
+                moves,
+                x.shape[1],
+                x.shape[2],
+                engine=engine,
+                board=state.board,
+            )
             test_positions.append((x, self_rem, opp_rem, move_features))
 
     print(f"Prepared {len(test_positions)} test positions")
@@ -140,6 +162,8 @@ def test_policy_performance():
             'piece_id': torch.from_numpy(mf['piece_id']).long().to(net.device),
             'anchor': torch.from_numpy(mf['anchor']).float().to(net.device),
             'size': torch.from_numpy(mf['size']).float().to(net.device),
+            'corner_gain': torch.from_numpy(mf['corner_gain']).float().to(net.device),
+            'opp_corner_block': torch.from_numpy(mf['opp_corner_block']).float().to(net.device),
             'cells': mf['cells'],
         }
         with torch.no_grad():
@@ -159,7 +183,9 @@ def test_policy_performance():
                 'piece_id': torch.from_numpy(mf['piece_id']).long().to(net.device),
                 'anchor': torch.from_numpy(mf['anchor']).float().to(net.device),
                 'size': torch.from_numpy(mf['size']).float().to(net.device),
-                'cells': mf['cells'],
+            'corner_gain': torch.from_numpy(mf['corner_gain']).float().to(net.device),
+            'opp_corner_block': torch.from_numpy(mf['opp_corner_block']).float().to(net.device),
+            'cells': mf['cells'],
             }
             with torch.no_grad():
                 _ = net(board, self_rem_t, opp_rem_t, move_tensors)

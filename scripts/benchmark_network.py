@@ -30,7 +30,13 @@ def benchmark_config(channels: int, num_blocks: int, num_iterations: int = 50):
 
     # エンコード（事前準備）
     board_encoded, self_rem, opp_rem, game_phase = encode_state_duo_v2(engine, state)
-    move_feat = batch_move_features(legal_moves, h=config.size, w=config.size)
+    move_feat = batch_move_features(
+        legal_moves,
+        h=config.size,
+        w=config.size,
+        engine=engine,
+        board=state.board,
+    )
 
     # ウォームアップ
     net.eval()
@@ -43,6 +49,8 @@ def benchmark_config(channels: int, num_blocks: int, num_iterations: int = 50):
                 "piece_id": torch.from_numpy(move_feat["piece_id"]).long().to(net.device),
                 "anchor": torch.from_numpy(move_feat["anchor"]).float().to(net.device),
                 "size": torch.from_numpy(move_feat["size"]).float().to(net.device),
+                "corner_gain": torch.from_numpy(move_feat["corner_gain"]).float().to(net.device),
+                "opp_corner_block": torch.from_numpy(move_feat["opp_corner_block"]).float().to(net.device),
                 "cells": move_feat["cells"],
             }
             _ = net(board_t, self_rem_t, opp_rem_t, move_tensors)
@@ -59,6 +67,8 @@ def benchmark_config(channels: int, num_blocks: int, num_iterations: int = 50):
                 "piece_id": torch.from_numpy(move_feat["piece_id"]).long().to(net.device),
                 "anchor": torch.from_numpy(move_feat["anchor"]).float().to(net.device),
                 "size": torch.from_numpy(move_feat["size"]).float().to(net.device),
+                "corner_gain": torch.from_numpy(move_feat["corner_gain"]).float().to(net.device),
+                "opp_corner_block": torch.from_numpy(move_feat["opp_corner_block"]).float().to(net.device),
                 "cells": move_feat["cells"],
             }
 

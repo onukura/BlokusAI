@@ -75,6 +75,15 @@ def collate_fn(batch):
     return batch
 
 
+def _reconstruct_board(encoded_board: np.ndarray, player: int) -> np.ndarray:
+    """エンコード済みボードから生の盤面配列を再構築する。"""
+    board = np.zeros((encoded_board.shape[1], encoded_board.shape[2]), dtype=np.int8)
+    board[encoded_board[0] > 0] = player + 1
+    opp = (player + 1) % 2
+    board[encoded_board[1] > 0] = opp + 1
+    return board
+
+
 def train_epoch(
     net: PolicyValueNet,
     samples: List[Sample],
@@ -111,6 +120,7 @@ def train_epoch(
     losses = []
     policy_losses_list = []
     value_losses_list = []
+    engine = Engine(GameConfig())
 
     for batch in loader:
         optimizer.zero_grad()
@@ -136,13 +146,18 @@ def train_epoch(
 
                 move_features = batch_move_features(
                     moves_transformed,  # 変換済みの手を使用
-                    x_transformed.shape[1], x_transformed.shape[2]
+                    x_transformed.shape[1],
+                    x_transformed.shape[2],
+                    engine=engine,
+                    board=_reconstruct_board(x_transformed, sample.player),
                 )
                 # 入力テンソルをデバイスに移動
                 move_tensors = {
                     "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
                     "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
                     "size": torch.from_numpy(move_features["size"]).float().to(device),
+                    "corner_gain": torch.from_numpy(move_features["corner_gain"]).float().to(device),
+                    "opp_corner_block": torch.from_numpy(move_features["opp_corner_block"]).float().to(device),
                     "cells": move_features["cells"],
                 }
                 board = torch.from_numpy(x_transformed[None]).float().to(device)
@@ -512,7 +527,7 @@ def load_training_state(
         net = PolicyValueNet(
             channels=arch["channels"],
             num_blocks=arch["num_blocks"],
-            in_channels=arch.get("in_channels", 28),
+            in_channels=arch.get("in_channels", 40),
         )
     net.load_state_dict(state["net_state_dict"])
 
@@ -1236,10 +1251,10 @@ if __name__ == "__main__":
         main(
             num_iterations=50,
             use_wandb=use_wandb,
-            games_per_iteration=100,  # Increased from 30 to 200 for better sample diversity
+            games_per_iteration=50,  # Increased from 30 to 200 for better sample diversity
             num_simulations=100,  # Balanced for speed vs quality
             num_workers=1,  # Auto-detect: GPU=1, CPU=min(cores, 4)
-            eval_interval=1,
+            eval_interval=2,
             eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,

@@ -45,11 +45,11 @@ class ResidualBlock(nn.Module):
 
 class BoardEncoder(nn.Module):
     """ボード状態をエンコードするResNetスタイルの畳み込みエンコーダ。"""
-    def __init__(self, in_channels: int = 28, channels: int = 64, num_blocks: int = 4):
+    def __init__(self, in_channels: int = 40, channels: int = 64, num_blocks: int = 4):
         """ボードエンコーダを初期化する。
 
         Args:
-            in_channels: 入力チャネル数（デフォルト28: 拡張特徴量）
+            in_channels: 入力チャネル数（デフォルト40: 拡張特徴量）
             channels: 内部特徴チャネル数
             num_blocks: 残差ブロックの数
         """
@@ -86,7 +86,7 @@ class PolicyValueNet(nn.Module):
     """
     def __init__(
         self,
-        in_channels: int = 28,
+        in_channels: int = 40,
         channels: int = 128,
         num_blocks: int = 10,
         n_pieces: int = 21,
@@ -94,7 +94,7 @@ class PolicyValueNet(nn.Module):
         """ネットワークを初期化する。
 
         Args:
-            in_channels: 入力チャネル数（デフォルト28: 拡張特徴量）
+            in_channels: 入力チャネル数（デフォルト40: 拡張特徴量）
             channels: エンコーダの内部チャネル数
             num_blocks: 残差ブロック数
             n_pieces: ピース総数（デフォルト21）
@@ -103,7 +103,7 @@ class PolicyValueNet(nn.Module):
         self.encoder = BoardEncoder(in_channels, channels, num_blocks)
         self.piece_embed = nn.Embedding(n_pieces, 16)
         self.policy_mlp = nn.Sequential(
-            nn.Linear(channels + 16 + 3, 128),
+            nn.Linear(channels + 16 + 5, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 1),
         )
@@ -173,6 +173,8 @@ class PolicyValueNet(nn.Module):
         piece_ids = move_features["piece_id"]
         anchors = move_features["anchor"]
         sizes = move_features["size"].unsqueeze(-1)
+        corner_gain = move_features["corner_gain"].unsqueeze(-1)
+        opp_corner_block = move_features["opp_corner_block"].unsqueeze(-1)
         cells = move_features["cells"]
         move_vecs = []
         for move_cells in cells:
@@ -184,7 +186,9 @@ class PolicyValueNet(nn.Module):
         move_tensor = torch.stack(move_vecs, dim=0)
 
         piece_emb = self.piece_embed(piece_ids)
-        features = torch.cat([move_tensor, piece_emb, anchors, sizes], dim=1)
+        features = torch.cat(
+            [move_tensor, piece_emb, anchors, sizes, corner_gain, opp_corner_block], dim=1
+        )
         logits = self.policy_mlp(features).squeeze(-1)
         return logits
 
@@ -293,6 +297,8 @@ def predict(
         "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
         "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
         "size": torch.from_numpy(move_features["size"]).float().to(device),
+        "corner_gain": torch.from_numpy(move_features["corner_gain"]).float().to(device),
+        "opp_corner_block": torch.from_numpy(move_features["opp_corner_block"]).float().to(device),
         "cells": move_features["cells"],  # cellsはリストのままなのでデバイス移動不要
     }
 
@@ -358,6 +364,8 @@ def batch_predict(
             "piece_id": torch.from_numpy(move_features["piece_id"]).long().to(device),
             "anchor": torch.from_numpy(move_features["anchor"]).float().to(device),
             "size": torch.from_numpy(move_features["size"]).float().to(device),
+            "corner_gain": torch.from_numpy(move_features["corner_gain"]).float().to(device),
+            "opp_corner_block": torch.from_numpy(move_features["opp_corner_block"]).float().to(device),
             "cells": move_features["cells"],
         }
 

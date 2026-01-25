@@ -3,7 +3,7 @@
 
 このスクリプトは以下をテストします:
 1. 新しい特徴量エンコード関数の動作確認
-2. ネットワークの入力形状確認（5ch→8ch）
+2. ネットワークの入力形状確認（5ch→40ch）
 3. 推論の動作確認
 4. パラメータ数の確認
 
@@ -112,11 +112,11 @@ def test_encode_state_duo_v2():
     # v2エンコーダー
     board_v2, self_rem, opp_rem, game_phase = encode_state_duo_v2(engine, state)
 
-    print(f"  ボード形状: {board_v2.shape}")  # 期待: (8, 14, 14)
+    print(f"  ボード形状: {board_v2.shape}")  # 期待: (40, 14, 14)
     print(f"  残りピース形状: {self_rem.shape}, {opp_rem.shape}")
     print(f"  ゲーム進行度: {game_phase:.3f}")
 
-    assert board_v2.shape == (8, 14, 14), f"形状エラー: {board_v2.shape}"
+    assert board_v2.shape == (40, 14, 14), f"形状エラー: {board_v2.shape}"
     assert self_rem.shape == (21,), f"残りピース形状エラー"
     assert isinstance(game_phase, float), "ゲーム進行度はfloat"
 
@@ -133,9 +133,9 @@ def test_encode_state_duo_v2():
 
 def test_network_v2():
     """v2ネットワークのテスト。"""
-    print("\n=== Test 5: ネットワーク（8チャンネル） ===")
+    print("\n=== Test 5: ネットワーク（40チャンネル） ===")
 
-    # v2ネットワーク（デフォルトは8チャンネル）
+    # v2ネットワーク（デフォルトは40チャンネル）
     net = PolicyValueNet()
     params = sum(p.numel() for p in net.parameters())
 
@@ -144,7 +144,7 @@ def test_network_v2():
     print(f"  内部チャンネル: {net.encoder.stem[0].out_channels}")
     print(f"  ResNetブロック数: {len(net.encoder.blocks)}")
 
-    assert net.encoder.stem[0].in_channels == 8, "入力チャンネルは8のはず"
+    assert net.encoder.stem[0].in_channels == 40, "入力チャンネルは40のはず"
 
     print("  ✅ ネットワーク構造正常")
 
@@ -202,7 +202,7 @@ def test_backward_compatibility():
     board_v2, self_rem_v2, opp_rem_v2, game_phase = encode_state_duo_v2(engine, state)
 
     print(f"  v1形状: {board_v1.shape}")  # (5, 14, 14)
-    print(f"  v2形状: {board_v2.shape}")  # (8, 14, 14)
+    print(f"  v2形状: {board_v2.shape}")  # (40, 14, 14)
 
     # 最初の5チャンネルは同じはず
     for i in range(5):

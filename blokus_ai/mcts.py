@@ -407,7 +407,13 @@ class MCTS:
             x, self_rem, opp_rem, game_phase = encode_state_duo_v2(
                 self.engine, node.state, moves=moves
             )
-            move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+            move_features = batch_move_features(
+                moves,
+                x.shape[1],
+                x.shape[2],
+                engine=self.engine,
+                board=node.state.board,
+            )
 
             boards.append(x)
             self_rems.append(self_rem)
@@ -563,7 +569,13 @@ class MCTS:
         x, self_rem, opp_rem, game_phase = encode_state_duo_v2(
             self.engine, node.state, moves=moves
         )
-        move_features = batch_move_features(moves, x.shape[1], x.shape[2])
+        move_features = batch_move_features(
+            moves,
+            x.shape[1],
+            x.shape[2],
+            engine=self.engine,
+            board=node.state.board,
+        )
         logits, value = predict(self.net, x, self_rem, opp_rem, move_features, game_phase)
         probs = np.exp(logits - np.max(logits))
         probs = probs / np.sum(probs)
