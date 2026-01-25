@@ -156,6 +156,26 @@ class WandBLogger:
         except Exception as e:
             print(f"[WandB] WARNING: Failed to upload artifact: {e}")
 
+    def get_run_name(self) -> str | None:
+        """Get the current WandB run name.
+
+        Returns:
+            Run name if available, None otherwise
+        """
+        if self.enabled and self.run is not None:
+            return self.run.name
+        return None
+
+    def get_run_id(self) -> str | None:
+        """Get the current WandB run ID.
+
+        Returns:
+            Run ID if available, None otherwise
+        """
+        if self.enabled and self.run is not None:
+            return self.run.id
+        return None
+
     def finish(self) -> None:
         """Finish the WandB run."""
         if self.enabled and self.run is not None:

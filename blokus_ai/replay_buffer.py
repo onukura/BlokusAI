@@ -144,3 +144,37 @@ class ReplayBuffer:
             len(buffer) / max_size
         """
         return len(self._buffer) / self.max_size
+
+    def state_dict(self) -> dict:
+        """バッファの状態を辞書として取得。
+
+        Returns:
+            バッファの状態を含む辞書（チェックポイント保存用）
+        """
+        return {
+            "max_size": self.max_size,
+            "buffer": list(self._buffer),  # dequeをlistに変換
+        }
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        """バッファの状態を復元。
+
+        Args:
+            state_dict: state_dict()で取得した状態辞書
+
+        Raises:
+            ValueError: 状態辞書が無効な場合
+        """
+        if "max_size" not in state_dict or "buffer" not in state_dict:
+            raise ValueError("Invalid state_dict: missing required keys")
+
+        # max_sizeが変更されている場合は警告
+        if state_dict["max_size"] != self.max_size:
+            import warnings
+            warnings.warn(
+                f"Buffer max_size mismatch: saved={state_dict['max_size']}, "
+                f"current={self.max_size}. Using current max_size."
+            )
+
+        # バッファを復元
+        self._buffer = deque(state_dict["buffer"], maxlen=self.max_size)

@@ -90,9 +90,21 @@ main(
     past_generations=[5, 10, 15],  # Compare against these generations
 )
 "
+
+# Resume interrupted training
+uv run python -c "
+from blokus_ai.train import main
+main(
+    num_iterations=50,
+    resume_from='models/checkpoints/training_state_iter_0020.pth',
+)
+"
 ```
 
-**New Feature**: Training now saves iteration-numbered checkpoints and evaluates against past models to track learning progress.
+**New Features**:
+- Training now saves iteration-numbered checkpoints and evaluates against past models to track learning progress.
+- **Training resume**: Interrupted training can be resumed from saved training states (includes model, optimizer, replay buffer, and scheduler states).
+- **Experiment isolation**: Each training run automatically gets its own directory (using WandB run name or timestamp), preventing different experiments from mixing.
 
 ### Evaluation
 

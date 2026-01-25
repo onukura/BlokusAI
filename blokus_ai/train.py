@@ -364,8 +364,6 @@ def save_checkpoint(
     Returns:
         保存されたチェックポイントのパス
     """
-    import os
-
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     checkpoint_path = os.path.join(
@@ -390,6 +388,121 @@ def save_checkpoint(
     return checkpoint_path
 
 
+def save_training_state(
+    net: PolicyValueNet,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    replay_buffer: ReplayBuffer | None = None,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+    checkpoint_dir: str = "models/checkpoints",
+) -> str:
+    """訓練状態全体を保存する（学習再開用）。
+
+    Args:
+        net: ニューラルネットワーク
+        optimizer: オプティマイザー
+        iteration: 現在のイテレーション番号
+        replay_buffer: リプレイバッファ（Noneの場合は保存しない）
+        scheduler: 学習率スケジューラー（Noneの場合は保存しない）
+        checkpoint_dir: 保存先ディレクトリ
+
+    Returns:
+        保存されたチェックポイントのパス
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(
+        checkpoint_dir, f"training_state_iter_{iteration:04d}.pth"
+    )
+
+    state = {
+        "net_state_dict": net.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "iteration": iteration,
+        "architecture": {
+            "channels": net.encoder.stem[0].out_channels,
+            "num_blocks": len(net.encoder.blocks),
+            "in_channels": 5,
+            "n_pieces": 21,
+        },
+    }
+
+    # リプレイバッファの状態を保存
+    if replay_buffer is not None:
+        state["replay_buffer"] = replay_buffer.state_dict()
+
+    # スケジューラーの状態を保存
+    if scheduler is not None:
+        state["scheduler_state_dict"] = scheduler.state_dict()
+
+    torch.save(state, checkpoint_path)
+    return checkpoint_path
+
+
+def load_training_state(
+    checkpoint_path: str,
+    net: PolicyValueNet | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    replay_buffer: ReplayBuffer | None = None,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
+) -> tuple[PolicyValueNet, torch.optim.Optimizer, int, ReplayBuffer | None]:
+    """訓練状態をチェックポイントから復元する。
+
+    Args:
+        checkpoint_path: チェックポイントファイルのパス
+        net: ネットワーク（Noneの場合は新規作成）
+        optimizer: オプティマイザー（状態の復元に使用）
+        replay_buffer: リプレイバッファ（状態の復元に使用）
+        scheduler: 学習率スケジューラー（状態の復元に使用）
+
+    Returns:
+        (net, optimizer, iteration, replay_buffer)のタプル
+
+    Raises:
+        FileNotFoundError: チェックポイントが見つからない場合
+        ValueError: チェックポイントが無効な場合
+    """
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    print(f"Loading training state from {checkpoint_path}")
+    state = torch.load(checkpoint_path, weights_only=False)
+
+    # 必須フィールドの確認
+    required_fields = ["net_state_dict", "optimizer_state_dict", "iteration", "architecture"]
+    missing_fields = [f for f in required_fields if f not in state]
+    if missing_fields:
+        raise ValueError(f"Invalid checkpoint: missing fields {missing_fields}")
+
+    # ネットワークの作成または復元
+    if net is None:
+        arch = state["architecture"]
+        net = PolicyValueNet(channels=arch["channels"], num_blocks=arch["num_blocks"])
+    net.load_state_dict(state["net_state_dict"])
+
+    # オプティマイザーの状態を復元
+    if optimizer is not None:
+        optimizer.load_state_dict(state["optimizer_state_dict"])
+
+    iteration = state["iteration"]
+
+    # リプレイバッファの復元
+    if replay_buffer is not None and "replay_buffer" in state:
+        replay_buffer.load_state_dict(state["replay_buffer"])
+        print(f"  Restored replay buffer: {len(replay_buffer)} samples")
+
+    # スケジューラーの復元
+    if scheduler is not None and "scheduler_state_dict" in state:
+        scheduler.load_state_dict(state["scheduler_state_dict"])
+        print(f"  Restored scheduler state")
+
+    print(f"  Resumed from iteration {iteration}")
+    print(f"  Network: {state['architecture']['channels']} channels, "
+          f"{state['architecture']['num_blocks']} blocks")
+
+    return net, optimizer, iteration, replay_buffer
+
+
 def evaluate_vs_best_model(
     current_net: PolicyValueNet,
     best_model_path: str,
@@ -409,8 +522,6 @@ def evaluate_vs_best_model(
     Returns:
         (採用するか, 勝率)のタプル
     """
-    import os
-
     from blokus_ai.eval import load_checkpoint, mcts_policy, play_match
 
     # ベストモデルが存在しない場合は無条件採用
@@ -478,7 +589,7 @@ def main(
     eval_interval: int = 5,
     save_path: str = "blokus_model.pth",
     past_generations: List[int] = None,
-    checkpoint_dir: str = "models/checkpoints",
+    checkpoint_dir: str | None = None,  # Auto-generated if None (experiment-specific directory)
     save_checkpoints: bool = True,
     use_wandb: bool = True,
     wandb_project: str = "BlokusAI",
@@ -516,6 +627,8 @@ def main(
     # Network architecture settings
     network_channels: int = 128,  # Number of channels in the network
     network_blocks: int = 10,  # Number of ResNet blocks
+    # Resume training
+    resume_from: str | None = None,  # Path to training state checkpoint to resume from
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -551,6 +664,7 @@ def main(
         past_generations = [5, 10]
 
     import torch
+    from datetime import datetime
 
     from blokus_ai.eval import evaluate_net_with_history
     from blokus_ai.wandb_logger import WandBLogger
@@ -595,51 +709,97 @@ def main(
             "arena_win_rate_threshold": arena_win_rate_threshold,
             "network_channels": network_channels,
             "network_blocks": network_blocks,
+            "resume_from": resume_from,
         },
         use_wandb=use_wandb,
     )
 
+    # Determine checkpoint directory
+    # Priority: resume_from > explicit checkpoint_dir > auto-generated
+    if resume_from is not None:
+        # When resuming, use the same directory as the checkpoint
+        checkpoint_dir = os.path.dirname(resume_from)
+        print(f"[Checkpoint] Using directory from resume checkpoint: {checkpoint_dir}")
+    elif checkpoint_dir is None:
+        # Auto-generate experiment-specific directory
+        if wandb_logger.enabled:
+            # Use WandB run name
+            run_name = wandb_logger.get_run_name()
+            if run_name:
+                checkpoint_dir = f"models/checkpoints/{run_name}"
+                print(f"[Checkpoint] Using WandB run name: {checkpoint_dir}")
+            else:
+                # Fallback to timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                checkpoint_dir = f"models/checkpoints/run_{timestamp}"
+                print(f"[Checkpoint] WandB run name unavailable, using timestamp: {checkpoint_dir}")
+        else:
+            # WandB disabled, use timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            checkpoint_dir = f"models/checkpoints/run_{timestamp}"
+            print(f"[Checkpoint] WandB disabled, using timestamp: {checkpoint_dir}")
+    else:
+        # User explicitly specified checkpoint_dir
+        print(f"[Checkpoint] Using explicitly specified directory: {checkpoint_dir}")
+
+    # Create checkpoint directory
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Initialize network, optimizer, and replay buffer
     net = PolicyValueNet(channels=network_channels, num_blocks=network_blocks)
-    total_params = sum(p.numel() for p in net.parameters())
-    device_name = get_device_name()
-    print(f"Using device: {device_name}")
-    print(f"Network: {network_channels} channels, {network_blocks} blocks ({total_params:,} parameters)")
-    print(
-        f"Starting training: {num_iterations} iterations, {games_per_iteration} games/iter"
-    )
-    print(f"MCTS simulations: {num_simulations}, eval interval: {eval_interval}")
-    print(f"Learning rate: {learning_rate}, max gradient norm: {max_grad_norm}")
-
-    # Log total parameters to WandB
-    wandb_logger.log({"total_parameters": total_params}, step=0)
-
-    # Initialize optimizer (persistent across iterations)
     optimizer = torch.optim.Adam(
         net.parameters(),
         lr=learning_rate,
         weight_decay=weight_decay
     )
-
-    # Initialize learning rate scheduler (optional)
     scheduler = None
     if use_lr_scheduler:
-        # Reduce LR on plateau: reduces LR when training loss stops improving
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.5, patience=5
         )
-        print("Learning rate scheduler enabled (ReduceLROnPlateau)")
-
-    # Initialize replay buffer
     replay_buffer = ReplayBuffer(max_size=buffer_size) if use_replay_buffer else None
+    start_iteration = 0
 
-    if use_replay_buffer:
-        print(f"Replay buffer enabled: max_size={buffer_size}, batch_size={batch_size}")
-        print(f"Training steps per iteration: {num_training_steps}")
-        print(f"Minimum buffer size for training: {min_buffer_size}")
+    # Resume from checkpoint if specified
+    if resume_from is not None:
+        print(f"\n{'='*60}")
+        print(f"Resuming training from checkpoint")
+        print(f"{'='*60}")
+        net, optimizer, start_iteration, replay_buffer = load_training_state(
+            checkpoint_path=resume_from,
+            net=net,
+            optimizer=optimizer,
+            replay_buffer=replay_buffer,
+            scheduler=scheduler,
+        )
+        print(f"Resuming from iteration {start_iteration}")
+        print(f"{'='*60}\n")
     else:
-        print("Replay buffer disabled (legacy mode)")
+        # Fresh training start
+        total_params = sum(p.numel() for p in net.parameters())
+        device_name = get_device_name()
+        print(f"Using device: {device_name}")
+        print(f"Network: {network_channels} channels, {network_blocks} blocks ({total_params:,} parameters)")
+        print(
+            f"Starting training: {num_iterations} iterations, {games_per_iteration} games/iter"
+        )
+        print(f"MCTS simulations: {num_simulations}, eval interval: {eval_interval}")
+        print(f"Learning rate: {learning_rate}, max gradient norm: {max_grad_norm}")
 
-    for iteration in range(num_iterations):
+        # Log total parameters to WandB
+        wandb_logger.log({"total_parameters": sum(p.numel() for p in net.parameters())}, step=0)
+
+        if use_lr_scheduler:
+            print("Learning rate scheduler enabled (ReduceLROnPlateau)")
+
+        if use_replay_buffer:
+            print(f"Replay buffer enabled: max_size={buffer_size}, batch_size={batch_size}")
+            print(f"Training steps per iteration: {num_training_steps}")
+            print(f"Minimum buffer size for training: {min_buffer_size}")
+        else:
+            print("Replay buffer disabled (legacy mode)")
+
+    for iteration in range(start_iteration, num_iterations):
         import time
         iteration_start_time = time.time()
         print(f"\n{'='*60}")
@@ -907,8 +1067,6 @@ def main(
                 if accept:
                     print(f"✓ New model accepted! Updating best model.")
                     # ベストモデルを更新
-                    import os
-
                     os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
                     torch.save(net.state_dict(), best_model_path)
                 else:
@@ -924,12 +1082,10 @@ def main(
                 )
             else:
                 # ゲーティング無効時は常にベストモデルを更新
-                import os
-
                 os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
                 torch.save(net.state_dict(), best_model_path)
 
-            # Save checkpoint
+            # Save checkpoint (model only, for evaluation)
             if save_checkpoints:
                 checkpoint_path = save_checkpoint(net, iteration + 1, checkpoint_dir)
                 print(f"Checkpoint saved to {checkpoint_path}")
@@ -948,6 +1104,17 @@ def main(
                     },
                 )
 
+                # Save training state (for resuming training)
+                training_state_path = save_training_state(
+                    net=net,
+                    optimizer=optimizer,
+                    iteration=iteration + 1,
+                    replay_buffer=replay_buffer,
+                    scheduler=scheduler,
+                    checkpoint_dir=checkpoint_dir,
+                )
+                print(f"Training state saved to {training_state_path}")
+
             # Save model (current iteration model, not best)
             torch.save(net.state_dict(), save_path)
             print(f"Model saved to {save_path}")
@@ -962,7 +1129,6 @@ def main(
 
 if __name__ == "__main__":
     import sys
-    import os
 
     # Check for --no-wandb flag
     use_wandb = "--no-wandb" not in sys.argv
