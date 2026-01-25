@@ -190,7 +190,7 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
                batch_size, use_batched_mcts, add_dirichlet_noise,
                temperature_start, temperature_end, temperature_threshold,
                dirichlet_alpha, dirichlet_epsilon, use_score_diff_targets,
-               normalize_range, use_tree_reuse)
+               normalize_range, use_tree_reuse, force_cpu)
 
     Returns:
         (訓練サンプルのリスト, ゲーム結果)
@@ -212,10 +212,17 @@ def _run_single_selfplay_game(args: Tuple) -> Tuple[List[Sample], float]:
         use_score_diff_targets,
         normalize_range,
         use_tree_reuse,
+        force_cpu,
     ) = args
 
     # 各プロセスでモデルを再構築（アーキテクチャ情報を使用）
     net = PolicyValueNet(channels=channels, num_blocks=num_blocks)
+
+    # force_cpu=Trueの場合、モデルをCPUに強制移動
+    if force_cpu:
+        net.device = torch.device("cpu")
+        net = net.to("cpu")
+
     net.load_state_dict(net_state_dict)
     net.eval()
 
@@ -257,6 +264,7 @@ def run_parallel_selfplay_games(
     use_score_diff_targets: bool = True,
     normalize_range: float = 50.0,
     use_tree_reuse: bool = True,
+    force_cpu_selfplay: bool = False,
     verbose: bool = True,
 ) -> List[Tuple[List[Sample], float]]:
     """複数の自己対戦ゲームを並列実行する。
@@ -277,14 +285,37 @@ def run_parallel_selfplay_games(
         use_score_diff_targets: スコア差ベースの価値ターゲットを使用するか
         normalize_range: スコア差の正規化範囲
         use_tree_reuse: MCTSツリー再利用を有効化（AlphaZero標準）
+        force_cpu_selfplay: Self-playを強制的にCPUで実行（GPU環境での並列化を可能にする）
         verbose: 詳細ログを表示するか
 
     Returns:
         [(訓練サンプルのリスト, ゲーム結果), ...] のリスト
     """
+    # GPU使用時は並列化を無効化（CUDAコンテキストはプロセス間で共有できない）
+    # ただし、force_cpu_selfplay=Trueの場合は並列化を許可
+    device = get_device()
+    is_gpu = device.type == "cuda"
+
     if num_workers is None:
-        # デフォルトはCPUコア数（最大4、メモリ使用量を考慮）
-        num_workers = min(multiprocessing.cpu_count(), 4)
+        if is_gpu and not force_cpu_selfplay:
+            # GPU使用時は並列化を無効化（force_cpu_selfplayが無効の場合のみ）
+            num_workers = 1
+            if verbose:
+                print(f"[Parallel] GPU detected: disabling parallelization (num_workers=1)")
+                print(f"[Parallel] Tip: Use force_cpu_selfplay=True to enable parallel self-play on GPU")
+        else:
+            # CPU使用時、またはforce_cpu_selfplay=Trueの場合はマルチプロセスを有効化
+            num_workers = min(multiprocessing.cpu_count(), 4)
+            if is_gpu and force_cpu_selfplay and verbose:
+                print(f"[Parallel] GPU detected but force_cpu_selfplay=True: enabling parallelization (num_workers={num_workers})")
+
+    # GPU使用時に並列化が要求された場合の処理
+    if is_gpu and num_workers > 1 and not force_cpu_selfplay:
+        if verbose:
+            print(f"[Warning] GPU detected but num_workers={num_workers} requested.")
+            print(f"[Warning] Forcing num_workers=1 to avoid CUDA multiprocessing errors.")
+            print(f"[Warning] Tip: Use force_cpu_selfplay=True to enable parallel self-play")
+        num_workers = 1
 
     # 並列化が無効または1ゲームのみの場合は逐次実行
     if num_workers <= 1 or num_games == 1:
@@ -340,6 +371,7 @@ def run_parallel_selfplay_games(
             use_score_diff_targets,
             normalize_range,
             use_tree_reuse,
+            force_cpu_selfplay,  # Self-playを強制的にCPUで実行
         )
         for game_idx in range(num_games)
     ]
@@ -629,6 +661,8 @@ def main(
     network_blocks: int = 10,  # Number of ResNet blocks
     # Resume training
     resume_from: str | None = None,  # Path to training state checkpoint to resume from
+    # Hybrid CPU/GPU execution
+    force_cpu_selfplay: bool = False,  # Force self-play on CPU (enables parallel self-play on GPU)
 ) -> None:
     """定期評価とモデル保存を含む訓練ループ。
 
@@ -710,6 +744,8 @@ def main(
             "network_channels": network_channels,
             "network_blocks": network_blocks,
             "resume_from": resume_from,
+            "force_cpu_selfplay": force_cpu_selfplay,
+            "num_workers": num_workers,
         },
         use_wandb=use_wandb,
     )
@@ -834,6 +870,7 @@ def main(
             use_score_diff_targets=use_score_diff_targets,
             normalize_range=normalize_range,
             use_tree_reuse=use_tree_reuse,
+            force_cpu_selfplay=force_cpu_selfplay,
             verbose=(not is_parallel),  # 逐次実行時のみ詳細ログ
         )
 
@@ -1133,7 +1170,30 @@ if __name__ == "__main__":
     # Check for --no-wandb flag
     use_wandb = "--no-wandb" not in sys.argv
 
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
+    if len(sys.argv) > 1 and sys.argv[1] == "gpu":
+        # GPU-optimized training (CPU self-play with parallelization, GPU training)
+        # Hybrid mode: self-play runs on CPU (parallel), training runs on GPU (fast)
+        main(
+            num_iterations=50,
+            use_wandb=use_wandb,
+            games_per_iteration=200,  # Can use more games thanks to CPU parallelization
+            num_simulations=100,  # Balanced for speed vs quality
+            num_workers=None,  # Auto-detect CPU cores for parallel self-play
+            force_cpu_selfplay=True,  # Force self-play on CPU to enable parallelization
+            eval_interval=5,
+            eval_games=10,
+            past_generations=[5, 10],
+            buffer_size=10000,
+            batch_size=256,
+            num_training_steps=100,  # Standard training steps
+            min_buffer_size=1000,
+            learning_rate=5e-4,
+            max_grad_norm=1.0,
+            use_lr_scheduler=True,
+            network_channels=64,
+            network_blocks=4,
+        )
+    elif len(sys.argv) > 1 and sys.argv[1] == "test":
         # Ultra-fast test (no eval, no wandb, no replay buffer)
         main(
             num_iterations=1,
@@ -1166,20 +1226,25 @@ if __name__ == "__main__":
         )
     else:
         # Full training (AlphaZero-style with replay buffer)
+        # Note: GPU environments disable parallelization automatically (num_workers=1)
+        # to avoid CUDA multiprocessing errors. For faster training on GPU,
+        # consider reducing games_per_iteration (e.g., 100) while keeping total samples high.
         main(
             num_iterations=50,
             use_wandb=use_wandb,
-            games_per_iteration=10,
+            games_per_iteration=200,  # Increased from 30 to 200 for better sample diversity
             num_simulations=100,  # Balanced for speed vs quality
-            num_workers=1,  # Auto-detect: min(multiprocessing.cpu_count(), 4) for parallel self-play
-            eval_interval=10,
+            num_workers=None,  # Auto-detect: GPU=1, CPU=min(cores, 4)
+            eval_interval=5,
             eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,
-            batch_size=128,
+            batch_size=256,
             num_training_steps=100,
             min_buffer_size=1000,
             learning_rate=5e-4,
             max_grad_norm=1.0,
             use_lr_scheduler=True,
+            network_channels=64,
+            network_blocks=4,
         )

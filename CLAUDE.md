@@ -78,7 +78,13 @@ uv run python -m blokus_ai.train test
 # Standard training (6 iterations with eval, past model comparison)
 uv run python -m blokus_ai.train quick
 
+# GPU-optimized training (50 iterations, hybrid CPU/GPU execution)
+# Self-play runs on CPU (parallel), training runs on GPU (fast)
+# Recommended for Google Colab and other single-GPU environments
+uv run python -m blokus_ai.train gpu
+
 # Full training (50 iterations, evaluates vs 5 & 10 generations back)
+# Best for CPU environments with multi-core parallelization
 uv run python -m blokus_ai.train
 
 # Custom training
@@ -105,6 +111,10 @@ main(
 - Training now saves iteration-numbered checkpoints and evaluates against past models to track learning progress.
 - **Training resume**: Interrupted training can be resumed from saved training states (includes model, optimizer, replay buffer, and scheduler states).
 - **Experiment isolation**: Each training run automatically gets its own directory (using WandB run name or timestamp), preventing different experiments from mixing.
+- **Hybrid CPU/GPU execution** (NEW): Self-play runs on CPU with parallelization (4 cores), while training runs on GPU. Best of both worlds for GPU environments.
+  - `force_cpu_selfplay=True`: Enables parallel self-play on GPU machines
+  - Achieves 200 games/iteration with 4-core parallelization (50 games worth of time)
+  - Training still runs on GPU for maximum speed
 
 ### Evaluation
 
