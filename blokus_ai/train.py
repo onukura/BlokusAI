@@ -1232,19 +1232,19 @@ if __name__ == "__main__":
         main(
             num_iterations=50,
             use_wandb=use_wandb,
-            games_per_iteration=200,  # Increased from 30 to 200 for better sample diversity
+            games_per_iteration=100,  # Increased from 30 to 200 for better sample diversity
             num_simulations=100,  # Balanced for speed vs quality
-            num_workers=None,  # Auto-detect: GPU=1, CPU=min(cores, 4)
+            num_workers=1,  # Auto-detect: GPU=1, CPU=min(cores, 4)
             eval_interval=5,
             eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,
-            batch_size=256,
+            batch_size=128,
             num_training_steps=100,
             min_buffer_size=1000,
             learning_rate=5e-4,
             max_grad_norm=1.0,
             use_lr_scheduler=True,
-            network_channels=64,
+            network_channels=32,
             network_blocks=4,
         )
