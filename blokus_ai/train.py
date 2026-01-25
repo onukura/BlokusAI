@@ -409,7 +409,7 @@ def save_checkpoint(
             "architecture": {
                 "channels": net.encoder.stem[0].out_channels,
                 "num_blocks": len(net.encoder.blocks),
-                "in_channels": 5,
+                "in_channels": net.encoder.stem[0].in_channels,
                 "n_pieces": 21,
             },
             "iteration": iteration,
@@ -454,7 +454,7 @@ def save_training_state(
         "architecture": {
             "channels": net.encoder.stem[0].out_channels,
             "num_blocks": len(net.encoder.blocks),
-            "in_channels": 5,
+            "in_channels": net.encoder.stem[0].in_channels,
             "n_pieces": 21,
         },
     }
@@ -509,7 +509,11 @@ def load_training_state(
     # ネットワークの作成または復元
     if net is None:
         arch = state["architecture"]
-        net = PolicyValueNet(channels=arch["channels"], num_blocks=arch["num_blocks"])
+        net = PolicyValueNet(
+            channels=arch["channels"],
+            num_blocks=arch["num_blocks"],
+            in_channels=arch.get("in_channels", 28),
+        )
     net.load_state_dict(state["net_state_dict"])
 
     # オプティマイザーの状態を復元

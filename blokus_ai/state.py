@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Tuple
+from dataclasses import dataclass, field
+from typing import List, Tuple
 
 import numpy as np
+
+MAX_HISTORY_LENGTH = 4
 
 
 @dataclass(frozen=True)
@@ -53,11 +55,13 @@ class GameState:
         remaining: 各プレイヤーの残りピース（n_players×n_pieces）
         turn: 現在のターンのプレイヤーID（0-indexed）
         first_move_done: 各プレイヤーが最初の手を打ったかどうか
+        board_history: 直近の盤面履歴（最新が末尾）
     """
     board: np.ndarray
     remaining: np.ndarray
     turn: int
     first_move_done: np.ndarray
+    board_history: List[np.ndarray] = field(default_factory=list)
 
     @classmethod
     def new(cls, config: GameConfig, n_pieces: int) -> "GameState":
@@ -74,7 +78,11 @@ class GameState:
         remaining = np.ones((config.n_players, n_pieces), dtype=bool)
         first_move_done = np.zeros(config.n_players, dtype=bool)
         return cls(
-            board=board, remaining=remaining, turn=0, first_move_done=first_move_done
+            board=board,
+            remaining=remaining,
+            turn=0,
+            first_move_done=first_move_done,
+            board_history=[],
         )
 
     def clone(self) -> "GameState":
@@ -88,6 +96,7 @@ class GameState:
             remaining=self.remaining.copy(),
             turn=self.turn,
             first_move_done=self.first_move_done.copy(),
+            board_history=[b.copy() for b in self.board_history],
         )
 
     def next_player(self) -> int:

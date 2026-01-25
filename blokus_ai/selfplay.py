@@ -155,7 +155,9 @@ def selfplay_game(
             policy = scaled / scaled.sum()
             choice = int(np.random.choice(len(visits), p=policy))
 
-        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(engine, state)
+        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(
+            engine, state, moves=root.moves
+        )
         samples.append(
             Sample(
                 x=x,

@@ -404,7 +404,9 @@ class MCTS:
                 continue
 
             # 非終端ノード: バッチ評価用にデータ収集
-            x, self_rem, opp_rem, game_phase = encode_state_duo_v2(self.engine, node.state)
+            x, self_rem, opp_rem, game_phase = encode_state_duo_v2(
+                self.engine, node.state, moves=moves
+            )
             move_features = batch_move_features(moves, x.shape[1], x.shape[2])
 
             boards.append(x)
@@ -558,7 +560,9 @@ class MCTS:
             # Non-terminal pass state - return neutral value
             # This shouldn't normally be reached as selfplay.py handles passes
             return 0.0
-        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(self.engine, node.state)
+        x, self_rem, opp_rem, game_phase = encode_state_duo_v2(
+            self.engine, node.state, moves=moves
+        )
         move_features = batch_move_features(moves, x.shape[1], x.shape[2])
         logits, value = predict(self.net, x, self_rem, opp_rem, move_features, game_phase)
         probs = np.exp(logits - np.max(logits))

@@ -6,7 +6,7 @@ from typing import Iterable, List, Tuple
 import numpy as np
 
 from blokus_ai.pieces import PIECES, Piece, PieceVariant
-from blokus_ai.state import GameConfig, GameState
+from blokus_ai.state import GameConfig, GameState, MAX_HISTORY_LENGTH
 
 # Rust統合
 try:
@@ -315,6 +315,9 @@ class Engine:
             指し手適用後の新しいGameState
         """
         new_state = state.clone()
+        new_state.board_history.append(state.board.copy())
+        if len(new_state.board_history) > MAX_HISTORY_LENGTH:
+            new_state.board_history = new_state.board_history[-MAX_HISTORY_LENGTH:]
         for x, y in move.cells:
             new_state.board[y, x] = move.player + 1
         new_state.remaining[move.player, move.piece_id] = False

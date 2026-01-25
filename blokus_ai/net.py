@@ -45,11 +45,11 @@ class ResidualBlock(nn.Module):
 
 class BoardEncoder(nn.Module):
     """ボード状態をエンコードするResNetスタイルの畳み込みエンコーダ。"""
-    def __init__(self, in_channels: int = 5, channels: int = 64, num_blocks: int = 4):
+    def __init__(self, in_channels: int = 28, channels: int = 64, num_blocks: int = 4):
         """ボードエンコーダを初期化する。
 
         Args:
-            in_channels: 入力チャネル数（デフォルト5: state encoding）
+            in_channels: 入力チャネル数（デフォルト28: 拡張特徴量）
             channels: 内部特徴チャネル数
             num_blocks: 残差ブロックの数
         """
@@ -86,7 +86,7 @@ class PolicyValueNet(nn.Module):
     """
     def __init__(
         self,
-        in_channels: int = 8,
+        in_channels: int = 28,
         channels: int = 128,
         num_blocks: int = 10,
         n_pieces: int = 21,
@@ -94,7 +94,7 @@ class PolicyValueNet(nn.Module):
         """ネットワークを初期化する。
 
         Args:
-            in_channels: 入力チャネル数（デフォルト8: v2特徴量）
+            in_channels: 入力チャネル数（デフォルト28: 拡張特徴量）
             channels: エンコーダの内部チャネル数
             num_blocks: 残差ブロック数
             n_pieces: ピース総数（デフォルト21）

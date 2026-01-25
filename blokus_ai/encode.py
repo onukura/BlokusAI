@@ -5,6 +5,8 @@ from typing import Dict, List, Sequence, Tuple
 import numpy as np
 
 from blokus_ai.engine import Engine, Move
+from blokus_ai.pieces import PIECES
+from blokus_ai.state import MAX_HISTORY_LENGTH
 from blokus_ai.state import GameState
 
 
@@ -154,15 +156,69 @@ def encode_game_phase(state: GameState) -> float:
     return phase
 
 
-def encode_state_duo_v2(
-    engine: Engine, state: GameState
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-    """拡張特徴量を含む状態エンコード（8チャンネル + ゲーム進行度）。
+def _encode_move_density(moves: Sequence[Move], shape: Tuple[int, int]) -> np.ndarray:
+    """合法手密度マップを作成する。"""
+    h, w = shape
+    density = np.zeros((h, w), dtype=np.float32)
+    for move in moves:
+        for x, y in move.cells:
+            density[y, x] += 1.0
+    max_val = density.max()
+    if max_val > 0:
+        density /= max_val
+    return density
 
-    元の5チャンネルに加えて、以下を追加:
-    - チャネル5: 自分の領域支配力
-    - チャネル6: 相手の領域支配力
-    - チャネル7: 自分の自由度マップ
+
+def _corner_connectivity_map(corners: np.ndarray) -> np.ndarray:
+    """コーナー候補の連結度マップを計算する。"""
+    h, w = corners.shape
+    connectivity = np.zeros((h, w), dtype=np.float32)
+    offsets = [
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ]
+    ys, xs = np.where(corners)
+    for y, x in zip(ys, xs):
+        count = 0
+        for dy, dx in offsets:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and corners[ny, nx]:
+                count += 1
+        connectivity[y, x] = count / 8.0
+    return connectivity
+
+
+def _remaining_piece_stats(remaining: np.ndarray) -> Tuple[int, int]:
+    """残りピースの総セル数と最大サイズを返す。"""
+    sizes = [PIECES[i].variants[0].size for i in range(len(remaining)) if remaining[i]]
+    if not sizes:
+        return 0, 0
+    return int(sum(sizes)), int(max(sizes))
+
+
+def encode_state_duo_v2(
+    engine: Engine,
+    state: GameState,
+    moves: Sequence[Move] | None = None,
+    opp_moves: Sequence[Move] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """拡張特徴量を含む状態エンコード（履歴+多特徴チャンネル + ゲーム進行度）。
+
+    元の5チャンネルに加えて以下を追加:
+    - 領域支配力（自分/相手）
+    - 自由度マップ（自分）
+    - 直近MAX_HISTORY_LENGTH手分の占有履歴（自分/相手）
+    - 合法手密度（自分/相手）
+    - コーナー連結度（自分/相手）
+    - 封鎖領域（自分/相手）
+    - ピース残量指標（最大サイズ/残りセル比率）
+    - バランス指標（占有差/残りセル差）
     - 追加スカラー: ゲーム進行度
 
     Args:
@@ -170,7 +226,7 @@ def encode_state_duo_v2(
         state: 現在のゲーム状態
 
     Returns:
-        (ボード配列(8, H, W), 自分の残りピース(21,), 相手の残りピース(21,), ゲーム進行度)
+        (ボード配列(C, H, W), 自分の残りピース(21,), 相手の残りピース(21,), ゲーム進行度)
     """
     # 元の5チャンネル
     board = state.board
@@ -187,7 +243,54 @@ def encode_state_duo_v2(
     territory_control = encode_territory_control(engine, state)  # (2, H, W)
     liberty_map = encode_liberty_map(engine, state, player)  # (H, W)
 
-    # 8チャンネルに統合
+    # 履歴チャネル（直近MAX_HISTORY_LENGTH手分）
+    history_self = []
+    history_opp = []
+    history_boards = state.board_history[-MAX_HISTORY_LENGTH:]
+    if history_boards:
+        for past_board in reversed(history_boards):
+            history_self.append((past_board == (player + 1)).astype(np.float32))
+            history_opp.append((past_board == (opp + 1)).astype(np.float32))
+    while len(history_self) < MAX_HISTORY_LENGTH:
+        history_self.append(np.zeros_like(board, dtype=np.float32))
+        history_opp.append(np.zeros_like(board, dtype=np.float32))
+
+    # 合法手密度マップ
+    if moves is None:
+        moves = engine.legal_moves(state, player)
+    if opp_moves is None:
+        opp_moves = engine.legal_moves(state, opp)
+
+    move_density = _encode_move_density(moves, board.shape)
+    opp_move_density = _encode_move_density(opp_moves, board.shape)
+
+    # コーナー連結度（近傍のコーナー候補密度）
+    self_corner_connect = _corner_connectivity_map(self_corner)
+    opp_corner_connect = _corner_connectivity_map(opp_corner)
+
+    # 封鎖領域（現在の合法手で到達できない空きセル）
+    empty_cells = (board == 0).astype(np.float32)
+    self_blocked = (empty_cells > 0) & (move_density == 0)
+    opp_blocked = (empty_cells > 0) & (opp_move_density == 0)
+
+    # ピース残量の盤面マップ化
+    self_remaining_cells, self_max_piece = _remaining_piece_stats(state.remaining[player])
+    opp_remaining_cells, opp_max_piece = _remaining_piece_stats(state.remaining[opp])
+    total_cells = board.size
+    self_remaining_ratio = np.full(board.shape, self_remaining_cells / total_cells, dtype=np.float32)
+    opp_remaining_ratio = np.full(board.shape, opp_remaining_cells / total_cells, dtype=np.float32)
+    self_max_piece_ratio = np.full(board.shape, self_max_piece / 5.0, dtype=np.float32)
+    opp_max_piece_ratio = np.full(board.shape, opp_max_piece / 5.0, dtype=np.float32)
+
+    # バランス指標（占有/残りセル差）
+    self_occupied = float(np.sum(self_occ))
+    opp_occupied = float(np.sum(opp_occ))
+    occupied_diff = (self_occupied - opp_occupied) / total_cells
+    remaining_diff = (self_remaining_cells - opp_remaining_cells) / total_cells
+    occupied_diff_map = np.full(board.shape, occupied_diff, dtype=np.float32)
+    remaining_diff_map = np.full(board.shape, remaining_diff, dtype=np.float32)
+
+    # チャンネル統合
     stacked = np.stack(
         [
             self_occ,
@@ -198,6 +301,20 @@ def encode_state_duo_v2(
             territory_control[player],  # 自分の支配力
             territory_control[opp],     # 相手の支配力
             liberty_map,
+            *history_self,
+            *history_opp,
+            move_density,
+            opp_move_density,
+            self_corner_connect,
+            opp_corner_connect,
+            self_blocked.astype(np.float32),
+            opp_blocked.astype(np.float32),
+            self_max_piece_ratio,
+            opp_max_piece_ratio,
+            self_remaining_ratio,
+            opp_remaining_ratio,
+            occupied_diff_map,
+            remaining_diff_map,
         ],
         axis=0,
     )
