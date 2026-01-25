@@ -1239,7 +1239,7 @@ if __name__ == "__main__":
             games_per_iteration=100,  # Increased from 30 to 200 for better sample diversity
             num_simulations=100,  # Balanced for speed vs quality
             num_workers=1,  # Auto-detect: GPU=1, CPU=min(cores, 4)
-            eval_interval=5,
+            eval_interval=1,
             eval_games=10,
             past_generations=[5, 10],
             buffer_size=10000,
@@ -1249,6 +1249,6 @@ if __name__ == "__main__":
             learning_rate=5e-4,
             max_grad_norm=1.0,
             use_lr_scheduler=True,
-            network_channels=32,
-            network_blocks=4,
+            network_channels=128,
+            network_blocks=10,
         )
